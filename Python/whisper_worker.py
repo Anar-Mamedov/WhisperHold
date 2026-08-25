@@ -3,7 +3,7 @@
 
 Protocol: one JSON object per line on stdin/stdout. stdout is reserved for the
 protocol; diagnostic text goes to stderr. The process loads the model once and
-keeps it in memory between dictations.
+keeps it in memory until the native app's idle timeout closes this worker.
 """
 
 from __future__ import annotations
@@ -40,6 +40,56 @@ def fail_fatally(error: BaseException) -> None:
     )
 
 
+def verify_weights(weights: Path, snapshot: Path) -> tuple[str, int]:
+    """Verify once, then reuse a file-identity marker on later cold starts."""
+    size_bytes = weights.stat().st_size
+    if size_bytes < 3_000_000_000:
+        raise RuntimeError(
+            f"model.safetensors beklenenden küçük ({size_bytes} bayt); tam large-v3 doğrulanamadı."
+        )
+
+    expected_sha256 = weights.resolve().name
+    if len(expected_sha256) != 64 or any(
+        character not in "0123456789abcdef" for character in expected_sha256
+    ):
+        raise RuntimeError("Hugging Face içerik adresli safetensors özeti bulunamadı.")
+
+    resolved = weights.resolve()
+    identity = {
+        "snapshot_revision": snapshot.name,
+        "weights_path": str(resolved),
+        "weights_sha256": expected_sha256,
+        "weights_bytes": size_bytes,
+        "weights_mtime_ns": resolved.stat().st_mtime_ns,
+    }
+    marker_root = Path(os.environ.get("HF_HOME", snapshot.parent)) / "dikte-verification"
+    marker = marker_root / f"{snapshot.name}-{expected_sha256}.json"
+    try:
+        if json.loads(marker.read_text(encoding="utf-8")) == identity:
+            emit_state("checking", "Daha önce doğrulanan resmî safetensors bulundu…")
+            return expected_sha256, size_bytes
+    except (FileNotFoundError, OSError, ValueError, TypeError):
+        pass
+
+    emit_state("checking", "Resmî safetensors SHA-256 özeti doğrulanıyor…")
+    digest = hashlib.sha256()
+    with weights.open("rb") as source:
+        while chunk := source.read(16 * 1024 * 1024):
+            digest.update(chunk)
+    actual_sha256 = digest.hexdigest()
+    if actual_sha256 != expected_sha256:
+        raise RuntimeError(
+            "model.safetensors SHA-256 doğrulaması başarısız: "
+            f"beklenen={expected_sha256} bulunan={actual_sha256}"
+        )
+
+    marker_root.mkdir(parents=True, exist_ok=True)
+    temporary_marker = marker.with_suffix(f".{os.getpid()}.tmp")
+    temporary_marker.write_text(json.dumps(identity, sort_keys=True), encoding="utf-8")
+    temporary_marker.replace(marker)
+    return actual_sha256, size_bytes
+
+
 def load_runtime() -> tuple[Any, Any, Any, str, str, dict[str, Any]]:
     # Imports happen after the first state event so the native UI never looks
     # frozen while PyTorch itself is being imported.
@@ -49,29 +99,34 @@ def load_runtime() -> tuple[Any, Any, Any, str, str, dict[str, Any]]:
     from huggingface_hub import snapshot_download
     from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
 
-    emit_state(
-        "downloading",
-        "Resmî openai/whisper-large-v3 dosyaları denetleniyor/indiriliyor…",
-    )
-
     # Only skip duplicate framework formats (pytorch_model.bin/flax/tf). The
     # exact safetensors checkpoint published by OpenAI is downloaded as-is.
-    snapshot_path = snapshot_download(
-        repo_id=MODEL_ID,
-        allow_patterns=[
-            "config.json",
-            "generation_config.json",
-            "model.safetensors",
-            "preprocessor_config.json",
-            "tokenizer.json",
-            "tokenizer_config.json",
-            "special_tokens_map.json",
-            "added_tokens.json",
-            "normalizer.json",
-            "merges.txt",
-            "vocab.json",
-        ],
-    )
+    allowed_files = [
+        "config.json",
+        "generation_config.json",
+        "model.safetensors",
+        "preprocessor_config.json",
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "special_tokens_map.json",
+        "added_tokens.json",
+        "normalizer.json",
+        "merges.txt",
+        "vocab.json",
+    ]
+    try:
+        snapshot_path = snapshot_download(
+            repo_id=MODEL_ID,
+            allow_patterns=allowed_files,
+            local_files_only=True,
+        )
+        emit_state("checking", "Resmî model yerel önbellekte bulundu…")
+    except Exception:
+        emit_state(
+            "downloading",
+            "Resmî openai/whisper-large-v3 dosyaları denetleniyor/indiriliyor…",
+        )
+        snapshot_path = snapshot_download(repo_id=MODEL_ID, allow_patterns=allowed_files)
     snapshot = Path(snapshot_path).resolve()
     weights = snapshot / "model.safetensors"
     config_file = snapshot / "config.json"
@@ -87,28 +142,7 @@ def load_runtime() -> tuple[Any, Any, Any, str, str, dict[str, Any]]:
             f"encoder={config.get('encoder_layers')} decoder={config.get('decoder_layers')}"
         )
 
-    size_bytes = weights.stat().st_size
-    if size_bytes < 3_000_000_000:
-        raise RuntimeError(
-            f"model.safetensors beklenenden küçük ({size_bytes} bayt); tam large-v3 doğrulanamadı."
-        )
-
-    emit_state("checking", "Resmî safetensors SHA-256 özeti doğrulanıyor…")
-    expected_sha256 = weights.resolve().name
-    if len(expected_sha256) != 64 or any(
-        character not in "0123456789abcdef" for character in expected_sha256
-    ):
-        raise RuntimeError("Hugging Face içerik adresli safetensors özeti bulunamadı.")
-    digest = hashlib.sha256()
-    with weights.open("rb") as source:
-        while chunk := source.read(16 * 1024 * 1024):
-            digest.update(chunk)
-    actual_sha256 = digest.hexdigest()
-    if actual_sha256 != expected_sha256:
-        raise RuntimeError(
-            "model.safetensors SHA-256 doğrulaması başarısız: "
-            f"beklenen={expected_sha256} bulunan={actual_sha256}"
-        )
+    actual_sha256, size_bytes = verify_weights(weights, snapshot)
 
     device = "mps" if torch.backends.mps.is_available() else "cpu"
     dtype = torch.float16 if device == "mps" else torch.float32

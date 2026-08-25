@@ -7,6 +7,7 @@ final class AppController: ObservableObject {
         case needsPermissions
         case preparing(String)
         case idle
+        case sleeping
         case recording
         case transcribing
         case failed(String)
@@ -16,6 +17,7 @@ final class AppController: ObservableObject {
             case .needsPermissions, .failed: return "exclamationmark.triangle.fill"
             case .preparing: return "arrow.down.circle"
             case .idle: return "mic"
+            case .sleeping: return "moon.zzz"
             case .recording: return "mic.fill"
             case .transcribing: return "waveform"
             }
@@ -26,6 +28,7 @@ final class AppController: ObservableObject {
             case .needsPermissions: return "İzinler eksik"
             case .preparing(let detail): return detail
             case .idle: return "Hazır"
+            case .sleeping: return "Hazır · model RAM'de değil"
             case .recording: return "Kaydediliyor…"
             case .transcribing: return "Çevriliyor…"
             case .failed(let message): return message
@@ -46,6 +49,15 @@ final class AppController: ObservableObject {
     private let indicator = RecordingIndicator()
     private var isMonitoring = false
     private var modelTask: Task<Void, Never>?
+    private var idleUnloadTask: Task<Void, Never>?
+
+    /// Üretimde her zaman 90 saniyedir. Ortam değişkeni yalnızca paketlenmiş
+    /// uygulamanın kısa süreli davranış testinde kullanılabilir.
+    private static var idleModelUnloadDelay: Duration {
+        let configured = ProcessInfo.processInfo.environment["DIKTE_IDLE_UNLOAD_SECONDS"]
+            .flatMap(Double.init) ?? 90
+        return .milliseconds(Int64(max(1, configured) * 1_000))
+    }
 
     init(permissions: Permissions, preferences: Preferences) {
         self.permissions = permissions
@@ -101,6 +113,7 @@ final class AppController: ObservableObject {
     }
 
     private func loadModel(restart: Bool = false) {
+        cancelIdleModelUnload()
         modelTask?.cancel()
         modelTask = Task { [weak self] in
             guard let self else { return }
@@ -110,9 +123,18 @@ final class AppController: ObservableObject {
                 } else {
                     try await self.engine.prepare()
                 }
-                if !Task.isCancelled { self.status = .idle }
+                if !Task.isCancelled, !self.isDictationActive {
+                    self.status = .idle
+                    self.scheduleIdleModelUnload()
+                }
             } catch {
-                if !Task.isCancelled { self.status = .failed(error.localizedDescription) }
+                if !Task.isCancelled {
+                    if self.isDictationActive {
+                        self.lastNotice = error.localizedDescription
+                    } else {
+                        self.status = .failed(error.localizedDescription)
+                    }
+                }
             }
         }
     }
@@ -123,24 +145,79 @@ final class AppController: ObservableObject {
             break
         case .installing(let detail), .checking(let detail),
              .downloading(let detail), .loading(let detail):
-            status = .preparing(detail)
+            if !isDictationActive { status = .preparing(detail) }
         case .ready:
-            status = .idle
+            if !isDictationActive {
+                status = .idle
+                scheduleIdleModelUnload()
+            }
         case .failed(let message):
-            status = .failed(message)
+            if isDictationActive {
+                lastNotice = message
+            } else {
+                status = .failed(message)
+            }
+        }
+    }
+
+    private var isDictationActive: Bool {
+        switch status {
+        case .recording, .transcribing:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func cancelIdleModelUnload() {
+        idleUnloadTask?.cancel()
+        idleUnloadTask = nil
+    }
+
+    private func scheduleIdleModelUnload() {
+        cancelIdleModelUnload()
+        guard engine.isReady, !isDictationActive else { return }
+
+        idleUnloadTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: Self.idleModelUnloadDelay)
+            } catch {
+                return
+            }
+            guard let self, !self.isDictationActive, self.engine.isReady else { return }
+            self.engine.unloadFromMemory()
+            self.modelTask = nil
+            self.idleUnloadTask = nil
+            self.status = .sleeping
+        }
+    }
+
+    /// Kayıt modelden önce başlar. Böylece 90 saniyelik boşta beklemeden sonra
+    /// ilk kelimeler kaybolmaz; model ses kaydedilirken paralel olarak yüklenir.
+    private func warmModelWhileRecording() {
+        guard !engine.isReady else { return }
+        modelTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.engine.prepare()
+            } catch {
+                if !Task.isCancelled { self.lastNotice = error.localizedDescription }
+            }
         }
     }
 
     // MARK: - Dikte
 
     private func beginRecording() {
-        guard case .idle = status, engine.isReady else { return }
+        guard status == .idle || status == .sleeping else { return }
+        cancelIdleModelUnload()
         do {
             try recorder.startRecording()
             status = .recording
             lastNotice = nil
             if preferences.showIndicator { indicator.showRecording() }
             play(.start)
+            warmModelWhileRecording()
         } catch {
             indicator.hide()
             status = .failed(error.localizedDescription)
@@ -152,6 +229,7 @@ final class AppController: ObservableObject {
         recorder.cancelRecording()
         indicator.hide()
         status = .idle
+        scheduleIdleModelUnload()
     }
 
     private func finishRecording() {
@@ -167,6 +245,7 @@ final class AppController: ObservableObject {
             indicator.hide()
             status = .idle
             play(.discard)
+            scheduleIdleModelUnload()
             return
         }
 
@@ -177,8 +256,16 @@ final class AppController: ObservableObject {
     }
 
     private func process(_ samples: [Float]) async {
-        defer { indicator.hide() }
+        defer {
+            indicator.hide()
+            scheduleIdleModelUnload()
+        }
         do {
+            // Model boşta kaldığı için kapalıysa kayıtla birlikte başlatılan
+            // yüklemeyi bekle. Olağan dışı biçimde görev yoksa burada hazırla.
+            await modelTask?.value
+            if !engine.isReady { try await engine.prepare() }
+
             let raw = try await engine.transcribe(
                 samples: samples,
                 language: preferences.language,
@@ -255,4 +342,3 @@ final class AppController: ObservableObject {
         NSSound(named: cue.rawValue)?.play()
     }
 }
-

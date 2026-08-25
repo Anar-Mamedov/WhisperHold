@@ -4,8 +4,9 @@ import Foundation
 /// sürecinde PyTorch/Transformers ile çalıştırır.
 ///
 /// Swift tarafı modeli dönüştürmez ve ağırlıklara dokunmaz. Python süreci bir
-/// kez açılır, model bellekte kalır; her dikte için yalnızca 16 kHz Float32 ses
-/// ve JSON komutu gönderilir.
+/// kez açılır; boşta kalma süresi dolduğunda süreç kapatılarak model belleği
+/// tamamen bırakılabilir. Her dikte için yalnızca 16 kHz Float32 ses ve JSON
+/// komutu gönderilir.
 @MainActor
 final class PythonWhisperEngine {
     static let modelID = "openai/whisper-large-v3"
@@ -132,6 +133,18 @@ final class PythonWhisperEngine {
         stopWorker(reason: EngineError.workerFailed("Model yeniden başlatılıyor…"))
         state = .idle
         try await prepare()
+    }
+
+    /// PyTorch/MPS belleği uygulama sürecinin dışında, worker sürecine aittir.
+    /// Süreci sonlandırmak modelin Metal/unified-memory alanını da işletim
+    /// sistemine geri verir. Bu metot yalnızca kayıt/çeviri yokken çağrılır.
+    func unloadFromMemory() {
+        guard worker != nil else {
+            state = .idle
+            return
+        }
+        stopWorker(reason: EngineError.workerFailed("Model boşta kaldığı için bellekten çıkarıldı."))
+        state = .idle
     }
 
     func transcribe(samples: [Float], language: String, prompt: String) async throws -> String {

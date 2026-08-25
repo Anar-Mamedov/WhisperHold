@@ -23,7 +23,10 @@ open DikteOriginal.xcodeproj
 resmî model Hugging Face'den
 `~/Library/Application Support/DikteOriginal/HuggingFace` altına indirilir.
 Bu ilk kurulum internet hızına göre uzun sürebilir. Sonraki açılışlarda aynı
-dosyalar doğrulanıp doğrudan diskten yüklenir.
+dosyalar doğrudan yerel diskten yüklenir. Uygulama kayıt, çeviri veya metin
+yapıştırma yapmadan 90 saniye boşta kalırsa model worker'ını kapatıp PyTorch/MPS
+belleğini serbest bırakır. Yeni kayıt anında başlar; model kayıt sürerken yerel
+diskten yeniden yüklenir ve kayıt bittikten sonra çeviri yapılır.
 
 Model hazır olduğunda Ayarlar → Model ekranında kaynak URL'si, safetensors
 dosyasının gerçek yolu/boyutu, 32+32 katman, PyTorch ve Transformers sürümleri
@@ -35,4 +38,3 @@ Varsayılan kısayol `⌃⌘` tuşlarını basılı tutmaktır. Konuşma boyunca
 bırakınca ses yerel modele gönderilir ve metin aktif uygulamaya yapıştırılır.
 
 Mikrofon, Girdi İzleme ve Erişilebilirlik izinlerinin üçü de gereklidir.
-
