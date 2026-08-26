@@ -98,6 +98,17 @@ final class RecordingIndicator {
             Task { @MainActor in
                 guard let self, self.generation == token else { return }
                 panel.orderOut(nil)
+
+                // `orderOut` pencereyi yalnızca görünmez yapar; içindeki
+                // NSHostingView yaşamaya devam eder. Böyle olunca ProgressView
+                // ve RecordingDot'un sonsuz animasyonları boşta bile SwiftUI
+                // çizim döngüsünü çalıştırıp App Nap'i engelliyordu. İçeriği
+                // söküp paneli bırakmak tüm animasyonları gerçekten sonlandırır.
+                panel.contentView = nil
+                panel.close()
+                if self.panel === panel {
+                    self.panel = nil
+                }
             }
         }
     }
