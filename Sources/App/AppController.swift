@@ -189,6 +189,22 @@ final class AppController: ObservableObject {
             self.modelTask = nil
             self.idleUnloadTask = nil
             self.status = .sleeping
+            self.restartHotkeyMonitoring()
+        }
+    }
+
+    /// Model worker'ı kapandıktan sonra global klavye tap'ini de tazeler.
+    /// Bazı macOS oturumlarında tap uzun süre açık kaldığında etkin görünmesine
+    /// rağmen olay göndermeyi bırakabiliyor; bu durumda uygulama uyuyor görünür
+    /// fakat kısayol onu uyandıramaz.
+    private func restartHotkeyMonitoring() {
+        guard permissions.allGranted, !isDictationActive else { return }
+        do {
+            try monitor.restart()
+            isMonitoring = true
+        } catch {
+            isMonitoring = false
+            status = .failed(error.localizedDescription)
         }
     }
 

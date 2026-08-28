@@ -62,6 +62,15 @@ final class HotkeyMonitor {
         CGEvent.tapEnable(tap: tap, enable: true)
     }
 
+    /// Uzun süreli boşta kalma, ekran kilidi veya kullanıcı oturumu değişimi
+    /// sonrasında macOS event tap'i görünürde açık bırakıp olay göndermeyi
+    /// kesebiliyor. Mevcut tap'i tamamen yeniden kurmak, yalnızca `enable`
+    /// çağırmaktan daha güvenilir.
+    func restart() throws {
+        stop()
+        try start()
+    }
+
     func stop() {
         if let runLoopSource {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
@@ -92,7 +101,11 @@ final class HotkeyMonitor {
         case .tapDisabledByTimeout, .tapDisabledByUserInput:
             // Sistem tap'i sessizce kapatabilir. Yeniden açmazsak kısayol bir daha
             // hiç çalışmaz ve kullanıcı sebebini asla anlayamaz.
+            let shouldCancel = isEngaged
+            isEngaged = false
+            pressedKeyCodes.removeAll()
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
+            if shouldCancel { onCancel?() }
             return
 
         case .keyDown:
