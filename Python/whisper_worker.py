@@ -202,13 +202,22 @@ def load_runtime() -> tuple[Any, Any, Any, str, str, dict[str, Any]]:
     processor.feature_extractor.return_attention_mask = True
 
     # No chunk_length_s: Whisper's own sequential long-form algorithm handles
-    # audio longer than 30 s, conditioning each window on the previous one.
+    # audio longer than 30 s.
     #
-    # The chunked alternative decodes fixed windows independently, and because
-    # every window is padded to 30 s each one is treated as a separate short
-    # clip with no shared state. A disfluent stretch that lands mid-window has
-    # nothing to anchor it, and on one 50 s recording that produced a decode
-    # that repeated the same phrase 31 times and swallowed the speech after it.
+    # The difference that matters is where the cut falls. Chunking slices at a
+    # fixed 22 s step regardless of what is being said, decodes each slice
+    # independently, and stitches the pieces by overlap; a sentence straddling a
+    # cut is decoded twice from two half-contexts. Sequential decoding instead
+    # advances to the end of the last segment the model itself closed, so a cut
+    # lands between segments rather than inside one. On one 50 s recording the
+    # chunked path turned a disfluent stretch into the same phrase repeated 31
+    # times and swallowed the real speech after it; sequential decodes it
+    # correctly and identically on repeated runs.
+    #
+    # It does NOT feed the previous window's text to the next one: that is
+    # `condition_on_prev_tokens`, which stays off here (transformers resolves it
+    # to None and takes the prompt-only branch). Turning it on would carry a bad
+    # window's text forward into the next, which is a different trade entirely.
     #
     # Measured on the five archived recordings, sequential is better on every
     # axis that matters here: the same transcript on repeated runs (chunked
@@ -252,8 +261,15 @@ def make_prompt(processor: Any, prompt: str, torch: Any, device: str) -> Any | N
     prompt_ids = processor.get_prompt_ids(cleaned, return_tensors="pt")
     # Whisper leaves at most 223 prompt tokens. Keep the most recent terms and
     # context when the user wrote a longer paragraph.
+    #
+    # Index 0 is the <|startofprev|> marker and has to survive the cut. It is
+    # what tells the decoder where the prompt ends, and transformers strips the
+    # prompt from the returned text by looking for exactly that token
+    # (tokenization_whisper.py `_strip_prompt`). A plain [-223:] drops it, and
+    # then the user's whole context sentence and vocabulary list are decoded as
+    # if they had been spoken and pasted in front of every transcript.
     if prompt_ids.shape[-1] > 223:
-        prompt_ids = prompt_ids[..., -223:]
+        prompt_ids = torch.cat([prompt_ids[..., :1], prompt_ids[..., -222:]], dim=-1)
     return prompt_ids.to(torch.device(device))
 
 

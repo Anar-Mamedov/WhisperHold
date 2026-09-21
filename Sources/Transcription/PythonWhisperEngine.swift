@@ -51,6 +51,7 @@ final class PythonWhisperEngine {
         case workerFailed(String)
         case notReady
         case invalidResponse
+        case timedOut
 
         var errorDescription: String? {
             switch self {
@@ -66,6 +67,8 @@ final class PythonWhisperEngine {
                 return "Model henüz hazır değil."
             case .invalidResponse:
                 return "Whisper motorundan geçersiz yanıt geldi."
+            case .timedOut:
+                return "Çeviri beklenenden çok uzun sürdü ve durduruldu. Ses arşivdeyse Kayıtlar sekmesinden yeniden denenebilir."
             }
         }
     }
@@ -88,6 +91,39 @@ final class PythonWhisperEngine {
     private var outputBuffer = Data()
     private var readyContinuation: CheckedContinuation<Void, Error>?
     private var pending: [String: CheckedContinuation<String, Error>] = [:]
+    private var watchdogs: [String: Task<Void, Never>] = [:]
+
+    /// Bir çeviri isteğinin en fazla bekleme süresi.
+    ///
+    /// Sıralı çözümlemede pencereyi modelin kendi zaman damgası ilerletiyor ve
+    /// ilerlemenin alt sınırı 20 milisaniye; transformers'ın döngüsünde bir tur
+    /// sayacı yok. Bozuk bir pencerede çözümleme saatlerce sürünebilir. Zaman
+    /// aşımı olmadığında bu, uygulamayı "Çevriliyor…" durumunda kalıcı olarak
+    /// kilitliyordu: kısayol da çalışmadığı için kullanıcıya uygulamayı
+    /// kapatmaktan başka çıkış kalmıyordu.
+    ///
+    /// Ölçülen en kötü gerçek durum, sesin 0,8 katı süre (ortasında on saniye
+    /// sessizlik olan bir kayıt). Dört kat, üstüne 90 saniyelik taban, bol pay
+    /// bırakıyor; bu sınırı aşan bir istek artık hata olarak geri dönüyor ve
+    /// uygulama kullanılabilir kalıyor.
+    private static func timeout(forSampleCount count: Int) -> Duration {
+        .seconds(max(90, Double(count) / AudioRecorder.sampleRate * 4))
+    }
+
+    /// Bekleyen isteği alır ve zaman aşımı gözcüsünü söndürür.
+    ///
+    /// Devamlılığın iki kez sürdürülmesi (gözcü ile yanıtın yarışması) çökme
+    /// sebebi; tek kapıdan geçirmek bunu yapısal olarak engelliyor.
+    @discardableResult
+    private func takePending(_ id: String) -> CheckedContinuation<String, Error>? {
+        watchdogs.removeValue(forKey: id)?.cancel()
+        return pending.removeValue(forKey: id)
+    }
+
+    private func cancelAllWatchdogs() {
+        for watchdog in watchdogs.values { watchdog.cancel() }
+        watchdogs.removeAll()
+    }
 
     private static var supportRoot: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -159,6 +195,17 @@ final class PythonWhisperEngine {
 
         return try await withCheckedThrowingContinuation { continuation in
             pending[requestID] = continuation
+            watchdogs[requestID] = Task { [weak self] in
+                try? await Task.sleep(for: Self.timeout(forSampleCount: samples.count))
+                guard !Task.isCancelled, let self,
+                      let waiting = self.takePending(requestID)
+                else { return }
+                // Süreç PyTorch'un içinde dönüyor; nazikçe durdurmanın yolu yok.
+                // Worker'ı kapatıyoruz, bir sonraki dikte onu yeniden kuruyor.
+                self.stopWorker(reason: EngineError.timedOut)
+                self.state = .failed(EngineError.timedOut.localizedDescription)
+                waiting.resume(throwing: EngineError.timedOut)
+            }
             do {
                 try send([
                     "id": requestID,
@@ -168,7 +215,7 @@ final class PythonWhisperEngine {
                     "prompt": prompt,
                 ])
             } catch {
-                pending.removeValue(forKey: requestID)
+                takePending(requestID)
                 continuation.resume(throwing: error)
             }
         }
@@ -352,16 +399,17 @@ final class PythonWhisperEngine {
             finishStartup()
 
         case "result":
+            // Devamlılığı aldıktan sonra mutlaka sürdürülmeli: metin alanı
+            // beklenmedik biçimde boş gelirse isteği askıda bırakmayalım.
             guard let id = message["id"] as? String,
-                  let continuation = pending.removeValue(forKey: id),
-                  let text = message["text"] as? String
+                  let continuation = takePending(id)
             else { return }
-            continuation.resume(returning: text)
+            continuation.resume(returning: message["text"] as? String ?? "")
 
         case "error":
             let id = message["id"] as? String ?? ""
             let error = EngineError.workerFailed(message["message"] as? String ?? "Whisper hatası")
-            if let continuation = pending.removeValue(forKey: id) {
+            if let continuation = takePending(id) {
                 continuation.resume(throwing: error)
             }
 
@@ -449,12 +497,14 @@ final class PythonWhisperEngine {
             state = .failed(error.localizedDescription)
         }
         finishStartup(throwing: error)
+        cancelAllWatchdogs()
         for continuation in pending.values { continuation.resume(throwing: error) }
         pending.removeAll()
     }
 
     private func stopWorker(reason: Error) {
         finishStartup(throwing: reason)
+        cancelAllWatchdogs()
         for continuation in pending.values { continuation.resume(throwing: reason) }
         pending.removeAll()
         worker?.terminate()

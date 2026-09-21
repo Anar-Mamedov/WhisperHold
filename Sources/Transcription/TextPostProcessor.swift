@@ -129,14 +129,23 @@ struct TextPostProcessor {
 
     /// Kalıp uzunluğuna göre "bu artık konuşma değil" eşiği.
     ///
-    /// Tek kelimede eşik bilerek yüksek: Türkçede ikileme (yavaş yavaş, tek tek)
-    /// ve vurgulu yineleme ("hayır hayır hayır hayır hayır hayır olmaz") gerçek
-    /// konuşmada var. Bir döngüyü kaçırmak, doğru dikteyi bozmaktan iyidir.
+    /// Eşikler her uzunlukta bilerek yüksek. Türkçede yineleme gerçek konuşmanın
+    /// parçası — yalnız tek kelimelik ikileme değil, öbek hâlinde de:
+    /// "Hayır olmaz, hayır olmaz, hayır olmaz, hayır olmaz dedim ama dinlemedi."
+    /// İlk sürümde iki-üç kelimelik eşik dört idi ve bu cümleden üç öbeği
+    /// siliyordu; kullanıcının söylediği kelimeyi silmek, bir döngüyü
+    /// kaçırmaktan çok daha kötü.
+    ///
+    /// Asıl savunma zaten burada değil: modelin kendi sıcaklık merdiveni
+    /// döngüyü çözümleme sırasında kırıyor. Bu süzgeç yalnızca oraya takılmayan
+    /// artıklar için bir ağ, o yüzden kaçırmayı göze alabilir. Ölçülen gerçek
+    /// çöküş üç kelimelik bir öbeğin 31 kez yinelenmesiydi — gerçek konuşmanın
+    /// erişebileceği hiçbir sayının yakınında değil.
     private static func minimumRepeats(forPhraseLength length: Int) -> Int {
         switch length {
-        case 1: return 10
-        case 2, 3: return 4
-        default: return 3
+        case 1: return 12
+        case 2, 3: return 8
+        default: return 5
         }
     }
 
@@ -243,7 +252,14 @@ struct TextPostProcessor {
                 repeats += 1
                 index += patternLength
             }
-            if repeats >= 4, index >= words.count - patternLength {
+            // Altı kez: dördü gerçek konuşmanın erişebildiği bir sayı.
+            // "Bu iş olmaz, bu iş olmaz, bu iş olmaz, bu iş olmaz, bu iş olmaz
+            // diye tutturdu." dörtte eleniyordu — ve bu süzgece takılan metin
+            // kırpılmıyor, tamamen atılıyor: kullanıcı imlecine hiçbir şey
+            // gelmiyor, yalnızca bir uyarı sesi duyuyor. Bu yüzden buradaki
+            // yanlış pozitif, kaçırmaktan çok daha pahalı. Modelin gerçek
+            // çöküşleri onlarca yineleme üretiyor, altının çok üstünde.
+            if repeats >= 6, index >= words.count - patternLength {
                 return true
             }
         }
