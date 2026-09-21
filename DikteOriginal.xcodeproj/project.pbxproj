@@ -18,6 +18,7 @@
 		5191251A4AB79F94C064F0B2 /* Preferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61CA4EB4FB0A30AF6B6FF1E9 /* Preferences.swift */; };
 		5CDCCE9CE59EFF03871D8CF3 /* HotkeyMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 377C8BDDBB89F69B0BCE8440 /* HotkeyMonitor.swift */; };
 		7237932D7AFDCE24EFD8B0A4 /* ShortcutSpec.swift in Sources */ = {isa = PBXBuildFile; fileRef = A84BCF903F91E2BA4C88E937 /* ShortcutSpec.swift */; };
+		76156A559AFF760085FC18C5 /* RecordingArchive.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89D70D599274DD7A97F56E18 /* RecordingArchive.swift */; };
 		7E5495CE33AC08B423E4293F /* AudioRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9C01C83C71F6902960601E4 /* AudioRecorder.swift */; };
 		7FE4E40B0B80C9A814D2E1B5 /* LaunchAtLogin.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5E085A4D8E383615F13A614 /* LaunchAtLogin.swift */; };
 		8B4803F6882EEE03AE628100 /* Permissions.swift in Sources */ = {isa = PBXBuildFile; fileRef = E547EA3601675DA0DFD130AE /* Permissions.swift */; };
@@ -26,6 +27,7 @@
 		A7AF42DDD0DACC957B850033 /* AudioTrimmer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6518101D567BD4C363ED4CBA /* AudioTrimmer.swift */; };
 		CF39167266B76AFB25C3716E /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B8DE28FB37EBA395F1346D5 /* SettingsView.swift */; };
 		CFA45041952EA00372C46EE6 /* AppController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47061D8FB4764C05D942948A /* AppController.swift */; };
+		F4C7B887A15E58EFE03EE9D9 /* RecordingsSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D0596E20A512CAB38608FFD /* RecordingsSettings.swift */; };
 		FD4D240B4571C223159D0915 /* ShortcutRecorderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB71B61B057115FE194C36AC /* ShortcutRecorderView.swift */; };
 		FD8247C99B5EFF89CC454622 /* Python in Resources */ = {isa = PBXBuildFile; fileRef = A41DB3B11352970A57B6934A /* Python */; };
 /* End PBXBuildFile section */
@@ -36,6 +38,7 @@
 		11781EDB4588D6BBCE3F1E30 /* TermCorrector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TermCorrector.swift; sourceTree = "<group>"; };
 		162792F024441F9D79408569 /* Dikte.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Dikte.entitlements; sourceTree = "<group>"; };
 		1C1A9E67E68F94EFFADB0C56 /* RecordingIndicator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingIndicator.swift; sourceTree = "<group>"; };
+		2D0596E20A512CAB38608FFD /* RecordingsSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingsSettings.swift; sourceTree = "<group>"; };
 		377C8BDDBB89F69B0BCE8440 /* HotkeyMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyMonitor.swift; sourceTree = "<group>"; };
 		3EAFF450266648D3FA8BB6D8 /* IndicatorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IndicatorView.swift; sourceTree = "<group>"; };
 		47061D8FB4764C05D942948A /* AppController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppController.swift; sourceTree = "<group>"; };
@@ -44,6 +47,7 @@
 		73F89E07B80AEAA92A3A22EC /* MenuBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarView.swift; sourceTree = "<group>"; };
 		7A77345FCFE1537174AEE146 /* TextPostProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextPostProcessor.swift; sourceTree = "<group>"; };
 		7B8DE28FB37EBA395F1346D5 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		89D70D599274DD7A97F56E18 /* RecordingArchive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingArchive.swift; sourceTree = "<group>"; };
 		A41DB3B11352970A57B6934A /* Python */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Python; sourceTree = SOURCE_ROOT; };
 		A84BCF903F91E2BA4C88E937 /* ShortcutSpec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutSpec.swift; sourceTree = "<group>"; };
 		A85CB994E7C1C6F484BC357B /* DikteOriginal.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DikteOriginal.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -91,6 +95,7 @@
 				EC642E9A4C109D396DFC4F4E /* AudioDevices.swift */,
 				E9C01C83C71F6902960601E4 /* AudioRecorder.swift */,
 				6518101D567BD4C363ED4CBA /* AudioTrimmer.swift */,
+				89D70D599274DD7A97F56E18 /* RecordingArchive.swift */,
 			);
 			path = Audio;
 			sourceTree = "<group>";
@@ -134,6 +139,7 @@
 			children = (
 				C5E085A4D8E383615F13A614 /* LaunchAtLogin.swift */,
 				61CA4EB4FB0A30AF6B6FF1E9 /* Preferences.swift */,
+				2D0596E20A512CAB38608FFD /* RecordingsSettings.swift */,
 				7B8DE28FB37EBA395F1346D5 /* SettingsView.swift */,
 				CB71B61B057115FE194C36AC /* ShortcutRecorderView.swift */,
 			);
@@ -260,7 +266,9 @@
 				8B4803F6882EEE03AE628100 /* Permissions.swift in Sources */,
 				5191251A4AB79F94C064F0B2 /* Preferences.swift in Sources */,
 				0B71BD81EEECAB18100BA22F /* PythonWhisperEngine.swift in Sources */,
+				76156A559AFF760085FC18C5 /* RecordingArchive.swift in Sources */,
 				16FE84C307ED9307CE0964C6 /* RecordingIndicator.swift in Sources */,
+				F4C7B887A15E58EFE03EE9D9 /* RecordingsSettings.swift in Sources */,
 				CF39167266B76AFB25C3716E /* SettingsView.swift in Sources */,
 				FD4D240B4571C223159D0915 /* ShortcutRecorderView.swift in Sources */,
 				7237932D7AFDCE24EFD8B0A4 /* ShortcutSpec.swift in Sources */,

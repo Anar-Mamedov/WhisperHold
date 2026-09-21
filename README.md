@@ -38,3 +38,27 @@ Varsayılan kısayol `⌃⌘` tuşlarını basılı tutmaktır. Konuşma boyunca
 bırakınca ses yerel modele gönderilir ve metin aktif uygulamaya yapıştırılır.
 
 Mikrofon, Girdi İzleme ve Erişilebilirlik izinlerinin üçü de gereklidir.
+
+## Kayıtları yeniden çevirme
+
+`~/Documents/DikteKayitlari` klasörü varsa her dikte WAV olarak saklanır ve
+yalnızca son beş kayıt tutulur. Klasör yoksa Ayarlar → Kayıtlar sekmesindeki
+"Arşivi aç" düğmesi oluşturur; kapatmak için klasörü silmek yeterli.
+
+Aynı sekme bu kayıtları listeler: her satırda kaydın tarihi, süresi, kaçıncı
+çeviri olduğu ve modelin o kayıt için ürettiği **son** metin görünür. Metin
+yanlış çıktıysa kaydı dinleyip **Yeniden çevir** ile aynı sesi modele tekrar
+gönderebilirsin.
+
+Yeniden çeviri o anki dil, bağlam cümlesi ve sözlük ayarlarıyla yapılır — Sözlük
+sekmesindeki bağlam cümlesini değiştirip aynı kaydı istediğin kadar yeniden
+deneyebilirsin. Ses dosyasına dokunulmaz, sadece yanındaki metin güncellenir; bu
+yüzden kaydın listedeki sırası da değişmez.
+
+Sonuç panoya kopyalanır ve ekranda gösterilir, imlece yapıştırılmaz: düğmeye
+bastığında öndeki pencere uygulamanın kendi penceresidir. Hedef uygulamaya geçip
+⌘V ile yapıştır.
+
+Menü çubuğu panelinde "Yeniden çevir" en son kaydı tek tıkla tekrar çevirir,
+"Kayıtlar…" ise doğrudan bu sekmeyi açar. Model boşta kaldığı için bellekten
+çıkmışsa yeniden çeviri onu diskten geri yükler; bekleme nedeni sekmede yazar.

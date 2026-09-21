@@ -4,23 +4,42 @@ enum SettingsWindow {
     static let id = "dikte-original-settings"
 }
 
+/// Pencere açılırken hangi sekmenin geleceğini menü çubuğu da seçebilsin diye
+/// sekme kimliği dışarıya açık.
+enum SettingsTab: Hashable {
+    case general
+    case model
+    case recordings
+    case vocabulary
+    case advanced
+}
+
 struct SettingsView: View {
+    @EnvironmentObject private var controller: AppController
+
     var body: some View {
-        TabView {
+        TabView(selection: $controller.settingsTab) {
             GeneralSettings()
                 .tabItem { Label("Genel", systemImage: "gearshape") }
+                .tag(SettingsTab.general)
             ModelSettings()
                 .tabItem { Label("Model", systemImage: "cpu") }
+                .tag(SettingsTab.model)
+            RecordingsSettings()
+                .tabItem { Label("Kayıtlar", systemImage: "waveform.circle") }
+                .tag(SettingsTab.recordings)
             VocabularySettings()
                 .tabItem { Label("Sözlük", systemImage: "character.book.closed") }
+                .tag(SettingsTab.vocabulary)
             AdvancedSettings()
                 .tabItem { Label("Gelişmiş", systemImage: "slider.horizontal.3") }
+                .tag(SettingsTab.advanced)
         }
         .frame(minWidth: 560, idealWidth: 620, minHeight: 420, idealHeight: 620)
     }
 }
 
-private struct ScrollingTab<Content: View>: View {
+struct ScrollingTab<Content: View>: View {
     @ViewBuilder let content: Content
 
     var body: some View {
@@ -287,11 +306,12 @@ private struct AdvancedSettings: View {
                 }
             }
 
-            LabeledContent("Tanı kayıtları") {
+            LabeledContent("Kayıt arşivi") {
                 VStack(alignment: .leading, spacing: 4) {
                     Button("Kayıt klasörünü aç / etkinleştir") { controller.openRecordingFolder() }
-                    Text("~/Documents/DikteKayitlari klasörü varsa son beş ses kaydı WAV olarak saklanır.")
+                    Text("~/Documents/DikteKayitlari klasörü varsa son \(RecordingArchive.retainCount) ses kaydı WAV olarak saklanır. Kayıtlar sekmesinden dinlenebilir ve yeniden çevrilebilir.")
                         .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }

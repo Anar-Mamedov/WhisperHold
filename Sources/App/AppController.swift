@@ -40,6 +40,21 @@ final class AppController: ObservableObject {
     @Published private(set) var lastTranscript = ""
     @Published private(set) var lastNotice: String?
 
+    /// Arşivdeki kayıtlar, en yeniden eskiye. `refreshRecordings()` tazeler.
+    @Published private(set) var recordings: [RecordingArchive.Recording] = []
+    /// Arşiv klasörü var mı? Kullanıcı klasörü Finder'dan silebildiği için
+    /// yalnızca liste tazelendiğinde güncelleniyor.
+    @Published private(set) var isArchiveEnabled = RecordingArchive.isEnabled
+    /// Şu anda yeniden çevrilen kayıt; satırdaki ilerleme göstergesini besler.
+    @Published private(set) var retranscribing: URL?
+    /// Model yükleme/indirme ayrıntısı. `status` dikte sürerken "Çevriliyor…"a
+    /// kilitlendiği için, uyuyan model diskten geri yüklenirken beklemenin
+    /// nedenini gösterebilmek adına ayrı tutuluyor.
+    @Published private(set) var modelActivity: String?
+
+    /// Ayarlar penceresi açıldığında görünecek sekme.
+    @Published var settingsTab = SettingsTab.general
+
     private let permissions: Permissions
     private let preferences: Preferences
     private let recorder = AudioRecorder()
@@ -88,6 +103,7 @@ final class AppController: ObservableObject {
 
         startMonitoring()
         applyPreferences()
+        refreshRecordings()
         loadModel()
     }
 
@@ -145,13 +161,16 @@ final class AppController: ObservableObject {
             break
         case .installing(let detail), .checking(let detail),
              .downloading(let detail), .loading(let detail):
+            modelActivity = detail
             if !isDictationActive { status = .preparing(detail) }
         case .ready:
+            modelActivity = nil
             if !isDictationActive {
                 status = .idle
                 scheduleIdleModelUnload()
             }
         case .failed(let message):
+            modelActivity = nil
             if isDictationActive {
                 lastNotice = message
             } else {
@@ -265,39 +284,38 @@ final class AppController: ObservableObject {
             return
         }
 
-        AudioDump.write(samples)
+        let archived = RecordingArchive.store(samples)
         status = .transcribing
         indicator.showTranscribing()
-        Task { await process(samples) }
+        Task { await process(samples, archived: archived) }
     }
 
-    private func process(_ samples: [Float]) async {
+    private func process(_ samples: [Float], archived: URL?) async {
         defer {
             indicator.hide()
             scheduleIdleModelUnload()
+            refreshRecordings()
         }
         do {
-            // Model boşta kaldığı için kapalıysa kayıtla birlikte başlatılan
-            // yüklemeyi bekle. Olağan dışı biçimde görev yoksa burada hazırla.
-            await modelTask?.value
-            if !engine.isReady { try await engine.prepare() }
+            try await ensureModelReady()
 
             let raw = try await engine.transcribe(
                 samples: samples,
                 language: preferences.language,
                 prompt: preferences.whisperPrompt
             )
-            var processor = TextPostProcessor()
-            processor.terms = preferences.technicalTerms
-            processor.replacements = preferences.replacements
 
-            guard let text = processor.process(raw) else {
+            guard let text = polish(raw) else {
+                // Atılan metni de arşive yazıyoruz: kullanıcı listede neyin
+                // çıktığını görmeden hangi kaydı yeniden çevireceğini bilemez.
+                if let archived { RecordingArchive.annotate(archived, transcript: raw) }
                 status = .idle
                 lastNotice = "Model boş veya güvenilmez bir sonuç üretti; metin yapıştırılmadı."
                 play(.discard)
                 return
             }
 
+            if let archived { RecordingArchive.annotate(archived, transcript: text) }
             lastTranscript = text
             switch await injector.deliver(text) {
             case .pasted:
@@ -315,11 +333,119 @@ final class AppController: ObservableObject {
         }
     }
 
+    /// Model boşta kaldığı için kapalıysa, kayıtla birlikte başlatılan yüklemeyi
+    /// bekler. Olağan dışı biçimde görev yoksa burada hazırlar.
+    private func ensureModelReady() async throws {
+        await modelTask?.value
+        if !engine.isReady { try await engine.prepare() }
+    }
+
+    /// Ham model çıktısını kullanıcının sözlüğünden geçirir.
+    /// `nil` dönerse metin güvenilmez; çağıran kullanıcıyı uyarır.
+    private func polish(_ raw: String) -> String? {
+        var processor = TextPostProcessor()
+        processor.terms = preferences.technicalTerms
+        processor.replacements = preferences.replacements
+        return processor.process(raw)
+    }
+
+    // MARK: - Kayıt arşivi
+
+    func refreshRecordings() {
+        isArchiveEnabled = RecordingArchive.isEnabled
+        recordings = RecordingArchive.recordings()
+    }
+
+    /// Arşivi açar: klasörü oluşturmak yetiyor, kayıtlar bundan sonra saklanır.
+    func enableRecordingArchive() {
+        RecordingArchive.enable()
+        refreshRecordings()
+    }
+
+    /// Yeni bir yeniden çeviri başlatılabilir mi?
+    ///
+    /// Dikte sürerken hayır: motorun tek bir isteği var ve kısayol her an yeni
+    /// bir kayıt başlatabilir. Model hazır olmasa bile evet — gerekirse diskten
+    /// yeniden yüklenir.
+    var canRetranscribe: Bool {
+        guard retranscribing == nil else { return false }
+        switch status {
+        case .idle, .sleeping, .failed: return true
+        default: return false
+        }
+    }
+
+    /// Arşivdeki bir kaydı **o anki** dil, bağlam cümlesi ve sözlük ayarlarıyla
+    /// yeniden çevirir. Aynı kayıt istenildiği kadar tekrar denenebilir.
+    ///
+    /// Sonuç imlece yapıştırılmıyor: bu düğmeye basıldığında öndeki pencere
+    /// uygulamanın kendi penceresi oluyor, oraya ⌘V göndermek metni yanlış yere
+    /// yazar. Metin panoya konur, arayüzde gösterilir; kullanıcı hedef
+    /// uygulamaya geçip kendisi yapıştırır.
+    func retranscribe(_ recording: RecordingArchive.Recording) {
+        guard canRetranscribe else { return }
+        cancelIdleModelUnload()
+        retranscribing = recording.url
+        status = .transcribing
+        lastNotice = nil
+
+        Task { [weak self] in
+            guard let self else { return }
+            defer {
+                self.retranscribing = nil
+                self.refreshRecordings()
+                self.scheduleIdleModelUnload()
+            }
+            do {
+                let samples = try RecordingArchive.samples(at: recording.url)
+                try await self.ensureModelReady()
+
+                let raw = try await self.engine.transcribe(
+                    samples: samples,
+                    language: self.preferences.language,
+                    prompt: self.preferences.whisperPrompt
+                )
+                let polished = self.polish(raw)
+                RecordingArchive.annotate(recording.url, transcript: polished ?? raw)
+
+                guard let text = polished else {
+                    self.status = .idle
+                    self.lastNotice = "Model yine boş veya güvenilmez bir sonuç üretti."
+                    self.play(.discard)
+                    return
+                }
+
+                self.lastTranscript = text
+                self.copyToPasteboard(text)
+                self.lastNotice = "Yeni çeviri panoya kopyalandı — hedef uygulamada ⌘V."
+                self.status = .idle
+                self.play(.success)
+            } catch {
+                self.status = .failed(error.localizedDescription)
+                self.play(.discard)
+            }
+        }
+    }
+
+    /// Menü çubuğundan tek tıkla: arşivdeki en son kaydı yeniden çevirir.
+    func retranscribeLatest() {
+        refreshRecordings()
+        guard let latest = recordings.first else {
+            lastNotice = "Arşivde kayıt yok. Gelişmiş ayarlardan kayıt klasörünü aç."
+            return
+        }
+        retranscribe(latest)
+    }
+
     func copyLastTranscript() {
         guard !lastTranscript.isEmpty else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(lastTranscript, forType: .string)
+        copyToPasteboard(lastTranscript)
         lastNotice = "Son çeviri panoya kopyalandı."
+    }
+
+    private func copyToPasteboard(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
 
     func revealModelFolder() {
@@ -330,8 +456,8 @@ final class AppController: ObservableObject {
     }
 
     func openRecordingFolder() {
-        try? FileManager.default.createDirectory(at: AudioDump.directory, withIntermediateDirectories: true)
-        NSWorkspace.shared.open(AudioDump.directory)
+        enableRecordingArchive()
+        NSWorkspace.shared.open(RecordingArchive.directory)
     }
 
     func previewIndicator() {

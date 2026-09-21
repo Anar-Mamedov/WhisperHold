@@ -58,8 +58,16 @@ struct MenuBarView: View {
                             .font(.caption)
                             .lineLimit(4)
                             .foregroundStyle(.secondary)
-                        Button("Panoya kopyala") { controller.copyLastTranscript() }
-                            .controlSize(.small)
+                        HStack(spacing: 8) {
+                            Button("Panoya kopyala") { controller.copyLastTranscript() }
+                            // Metin yanlış çıktığında en sık istenen şey aynı sesi
+                            // tekrar çevirtmek; en son kayıt için tek tıkla burada.
+                            Button("Yeniden çevir") { controller.retranscribeLatest() }
+                                .disabled(!controller.canRetranscribe || controller.recordings.isEmpty)
+                            Spacer()
+                            Button("Kayıtlar…") { openRecordings() }
+                        }
+                        .controlSize(.small)
                     }
                 }
             }
@@ -80,11 +88,18 @@ struct MenuBarView: View {
         .padding(14)
         .frame(width: 340)
         .task {
+            controller.refreshRecordings()
             while !Task.isCancelled && !permissions.allGranted {
                 try? await Task.sleep(for: .seconds(1))
                 permissions.refresh()
             }
         }
+    }
+
+    private func openRecordings() {
+        controller.settingsTab = .recordings
+        NSApp.activate(ignoringOtherApps: true)
+        openWindow(id: SettingsWindow.id)
     }
 
     private var statusColor: Color {
