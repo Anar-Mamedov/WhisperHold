@@ -21,6 +21,37 @@ MODEL_URL = "https://huggingface.co/openai/whisper-large-v3"
 SAMPLE_RATE = 16_000
 EXPECTED_PARAMETER_COUNT = 1_543_490_560
 
+# Last-resort escape from a repetition loop: re-decode a segment at a higher
+# temperature when its output looks too repetitive. Whisper's reference
+# implementation does this, and transformers carries the machinery — but
+# `temperature` defaults to None, which collapses the ladder to a single pass
+# and returns the looped text as-is. Supplying a ladder switches it on.
+#
+# This is a net, not the fix. The first rung is 0.0 (do_sample=False), so
+# healthy audio never leaves the deterministic path: measured over the five
+# archived recordings the ladder never fires and every run returns identical
+# text. It matters only when a segment degenerates anyway, and then a sampled
+# retry beats a phrase repeated thirty times.
+#
+# Keep it a LAST resort. The retries sample, so a rescued segment is not
+# reproducible — when this ladder was carrying the fix on its own, the same
+# recording returned three different wrong transcripts on three runs, one of
+# which echoed this prompt back into the transcript. Anything that stops
+# segments from degenerating in the first place belongs above this line.
+TEMPERATURE_LADDER = (0.0, 0.4, 0.8)
+
+# gzip ratio of a segment's tokens, above which the segment is re-decoded.
+# Measured with transformers' own metric on this checkpoint: clean speech
+# scores ~1.00 and a 31-repeat loop scores 3.15, so 1.35 fires well before a
+# loop grows long while leaving normal dictation untouched.
+COMPRESSION_RATIO_THRESHOLD = 1.35
+
+# Deliberately NOT set: logprob_threshold and no_speech_threshold. Both fire on
+# perfectly healthy short dictation and walk every clip up the whole ladder —
+# the same 18.5 s recording takes 2.9 s without them and 21.7 s with them, for
+# identical text. In transformers 4.46.3 no_speech_threshold without
+# logprob_threshold also raises UnboundLocalError.
+
 
 def emit(message: dict[str, Any]) -> None:
     print(json.dumps(message, ensure_ascii=False), flush=True)
@@ -170,13 +201,26 @@ def load_runtime() -> tuple[Any, Any, Any, str, str, dict[str, Any]]:
     # üretilmeli; aksi hâlde Transformers güvenilirlik uyarısı veriyor.
     processor.feature_extractor.return_attention_mask = True
 
+    # No chunk_length_s: Whisper's own sequential long-form algorithm handles
+    # audio longer than 30 s, conditioning each window on the previous one.
+    #
+    # The chunked alternative decodes fixed windows independently, and because
+    # every window is padded to 30 s each one is treated as a separate short
+    # clip with no shared state. A disfluent stretch that lands mid-window has
+    # nothing to anchor it, and on one 50 s recording that produced a decode
+    # that repeated the same phrase 31 times and swallowed the speech after it.
+    #
+    # Measured on the five archived recordings, sequential is better on every
+    # axis that matters here: the same transcript on repeated runs (chunked
+    # varied wildly on the failing file), closer to what was actually said, and
+    # no slower — 9.8 s vs 12.5 s on the 50 s file, 2.2 s vs 2.0 s on a 11.6 s
+    # one. Transformers itself warns that chunking "is very experimental with
+    # seq2seq models" and costs accuracy.
     asr = pipeline(
         "automatic-speech-recognition",
         model=model,
         tokenizer=processor.tokenizer,
         feature_extractor=processor.feature_extractor,
-        chunk_length_s=28,
-        stride_length_s=(4, 2),
         torch_dtype=dtype,
         device=device,
     )
@@ -225,7 +269,11 @@ def transcribe(
 
     language = str(request.get("language") or "auto")
     prompt = str(request.get("prompt") or "")
-    generate_kwargs: dict[str, Any] = {"task": "transcribe"}
+    generate_kwargs: dict[str, Any] = {
+        "task": "transcribe",
+        "temperature": TEMPERATURE_LADDER,
+        "compression_ratio_threshold": COMPRESSION_RATIO_THRESHOLD,
+    }
     if language != "auto":
         generate_kwargs["language"] = language
     prompt_ids = make_prompt(processor, prompt, torch, runtime["device"])

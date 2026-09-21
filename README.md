@@ -62,3 +62,8 @@ bastığında öndeki pencere uygulamanın kendi penceresidir. Hedef uygulamaya 
 Menü çubuğu panelinde "Yeniden çevir" en son kaydı tek tıkla tekrar çevirir,
 "Kayıtlar…" ise doğrudan bu sekmeyi açar. Model boşta kaldığı için bellekten
 çıkmışsa yeniden çeviri onu diskten geri yükler; bekleme nedeni sekmede yazar.
+
+Aynı kaydın iki denemesi her zaman aynı metni vermez. Model bir bölümde tekrar
+döngüsüne girerse o bölüm daha yüksek sıcaklıkla yeniden çözülür ve bu adım
+rastgeledir — zaten yeniden çevirmenin işe yaramasının nedeni de bu. Sağlıklı
+ses her denemede aynı metni verir.

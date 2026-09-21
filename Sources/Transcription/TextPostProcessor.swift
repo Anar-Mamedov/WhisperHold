@@ -74,6 +74,7 @@ struct TextPostProcessor {
         }
 
         text = Self.trimmingTrailingLoop(text)
+        text = Self.collapsingRepeatedPhrases(text)
         text = applyReplacements(to: text)
         text = text.replacingOccurrences(
             of: "\\s+", with: " ", options: .regularExpression
@@ -106,6 +107,107 @@ struct TextPostProcessor {
         // Üç kez arka arkaya birebir aynı cümle — gerçek diktede pratikte olmuyor.
         guard repeats >= 3, index >= 0 else { return text }
         return sentences[0...index].joined().trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Taranacak en uzun kalıp. Daha uzun cümle döngüleri zaten
+    /// `trimmingTrailingLoop`'un işi.
+    private static let maxPhraseWords = 10
+
+    /// Sayı sayarken veya kod okurken aynı kelime gerçekten arka arkaya gelir:
+    /// "şifre bir bir bir bir bir bir". Böyle bir diziyi kısaltmak kullanıcının
+    /// yazdırdığı kodu sessizce bozar, o yüzden tamamen sayılardan oluşan
+    /// kalıplara hiç dokunmuyoruz.
+    ///
+    /// Küme `normalize`'dan geçirilerek kuruluyor: Türkçe noktasız 'ı' harfi
+    /// diyakritik katlamasıyla 'i'ye dönüşmüyor, elle yazılmış ASCII bir liste
+    /// ("sifir", "alti") sessizce tutmazdı.
+    private static let countableWords: Set<String> = Set([
+        "sıfır", "bir", "iki", "üç", "dört", "beş", "altı", "yedi", "sekiz",
+        "dokuz", "on", "yirmi", "otuz", "kırk", "elli", "altmış", "yetmiş",
+        "seksen", "doksan", "yüz", "bin", "milyon",
+    ].map(normalize))
+
+    /// Kalıp uzunluğuna göre "bu artık konuşma değil" eşiği.
+    ///
+    /// Tek kelimede eşik bilerek yüksek: Türkçede ikileme (yavaş yavaş, tek tek)
+    /// ve vurgulu yineleme ("hayır hayır hayır hayır hayır hayır olmaz") gerçek
+    /// konuşmada var. Bir döngüyü kaçırmak, doğru dikteyi bozmaktan iyidir.
+    private static func minimumRepeats(forPhraseLength length: Int) -> Int {
+        switch length {
+        case 1: return 10
+        case 2, 3: return 4
+        default: return 3
+        }
+    }
+
+    private static func isCountable(_ pattern: ArraySlice<String>) -> Bool {
+        pattern.allSatisfy { key in
+            !key.isEmpty && (countableWords.contains(key) || key.allSatisfy(\.isNumber))
+        }
+    }
+
+    /// Metnin **herhangi bir yerinde** arka arkaya yinelenen kelime öbeğini tek
+    /// kopyaya indirir.
+    ///
+    /// Mevcut iki süzgeç bu çöküşü yapısal olarak kaçırıyor:
+    /// `isDegenerateRepetition` yalnız metnin TAMAMI aynı kalıpken,
+    /// `trimmingTrailingLoop` yalnız yineleme sondaki tam cümlelerken devreye
+    /// giriyor. Whisper'ın gerçek çöküşü ikisinin arasına düşüyor — cümlenin
+    /// ortasında, virgülle ayrılmış, ve arkasından gerçek bir cümle geliyor:
+    ///
+    ///     "…bu uygulamayı yaparken, birçok uygulama yaparken, birçok uygulama
+    ///      yaparken, [×31] … Yani düzelttiğim sadece bozulan id'yi düzeltmekti."
+    ///
+    /// Karşılaştırma `normalize` üzerinden: "yaparken," ile "Yaparken" aynı
+    /// kelimedir, aradaki virgül tekrarı gizlememeli. Saklanan kopya ilk
+    /// görülen ham kelimedir, böylece cümle başı büyük harfi korunur.
+    static func collapsingRepeatedPhrases(_ text: String) -> String {
+        let tokens = text.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        guard tokens.count >= 4 else { return text }
+        let keys = tokens.map(normalize)
+
+        var output: [String] = []
+        output.reserveCapacity(tokens.count)
+        var index = 0
+        var collapsed = false
+
+        while index < tokens.count {
+            var matchedLength = 0
+            for length in 1...maxPhraseWords where index + length * 2 <= tokens.count {
+                let pattern = keys[index..<(index + length)]
+                // Noktalamadan ibaret bir "kelime" kalıp olamaz.
+                guard !pattern.contains(where: { $0.isEmpty }) else { continue }
+                guard !isCountable(pattern) else { continue }
+
+                var repeats = 1
+                while index + (repeats + 1) * length <= tokens.count,
+                      keys[(index + repeats * length)..<(index + (repeats + 1) * length)]
+                        .elementsEqual(pattern) {
+                    repeats += 1
+                }
+                if repeats >= minimumRepeats(forPhraseLength: length) {
+                    output.append(contentsOf: tokens[index..<(index + length)])
+                    index += repeats * length
+                    matchedLength = length
+                    collapsed = true
+                    break
+                }
+            }
+            if matchedLength == 0 {
+                output.append(tokens[index])
+                index += 1
+            }
+        }
+
+        // Hiçbir şey kırpılmadıysa özgün metni aynen döndür; boşlukları bile
+        // değiştirmeyelim.
+        guard collapsed else { return text }
+
+        // Kırpma sessiz olmamalı: bu süzgeç bir emniyet ağı, çözümleyicinin
+        // çöktüğünü gizlemek için değil. Tetiklendiği her seferde asıl sorun
+        // modelde ve kayıt arşivinden yeniden çevrilerek incelenebilir.
+        NSLog("Dikte: tekrar döngüsü kırpıldı — \(tokens.count) kelime → \(output.count)")
+        return output.joined(separator: " ")
     }
 
     /// Cümlelere böler, noktalama işaretini cümlede bırakır.
