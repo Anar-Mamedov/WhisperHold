@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum SettingsWindow {
-    static let id = "dikte-original-settings"
+    static let id = "whisperhold-settings"
 }
 
 /// Pencere açılırken hangi sekmenin geleceğini menü çubuğu da seçebilsin diye
@@ -309,7 +309,7 @@ private struct AdvancedSettings: View {
             LabeledContent("Kayıt arşivi") {
                 VStack(alignment: .leading, spacing: 4) {
                     Button("Kayıt klasörünü aç / etkinleştir") { controller.openRecordingFolder() }
-                    Text("~/Documents/DikteKayitlari klasörü varsa son \(RecordingArchive.retainCount) ses kaydı WAV olarak saklanır. Kayıtlar sekmesinden dinlenebilir ve yeniden çevrilebilir.")
+                    Text("~/Documents/WhisperHold klasörü varsa son \(RecordingArchive.retainCount) ses kaydı WAV olarak saklanır. Kayıtlar sekmesinden dinlenebilir ve yeniden çevrilebilir.")
                         .font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }

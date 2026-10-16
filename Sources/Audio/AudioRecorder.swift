@@ -123,7 +123,7 @@ final class AudioRecorder {
             UInt32(MemoryLayout<AudioDeviceID>.size)
         )
         if status != noErr {
-            NSLog("Dikte: giriş cihazı ayarlanamadı (\(status)), sistem varsayılanı kullanılıyor")
+            NSLog("WhisperHold: giriş cihazı ayarlanamadı (\(status)), sistem varsayılanı kullanılıyor")
         }
     }
 

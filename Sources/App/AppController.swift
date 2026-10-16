@@ -69,7 +69,7 @@ final class AppController: ObservableObject {
     /// Üretimde her zaman 90 saniyedir. Ortam değişkeni yalnızca paketlenmiş
     /// uygulamanın kısa süreli davranış testinde kullanılabilir.
     private static var idleModelUnloadDelay: Duration {
-        let configured = ProcessInfo.processInfo.environment["DIKTE_IDLE_UNLOAD_SECONDS"]
+        let configured = ProcessInfo.processInfo.environment["WHISPERHOLD_IDLE_UNLOAD_SECONDS"]
             .flatMap(Double.init) ?? 90
         return .milliseconds(Int64(max(1, configured) * 1_000))
     }
@@ -328,7 +328,7 @@ final class AppController: ObservableObject {
             status = .idle
         } catch {
             status = .failed(error.localizedDescription)
-            lastNotice = "Ses kaybolmadıysa ~/Documents/DikteKayitlari klasöründen tekrar test edilebilir."
+            lastNotice = "Ses kaybolmadıysa ~/Documents/WhisperHold klasöründen tekrar test edilebilir."
             play(.discard)
         }
     }

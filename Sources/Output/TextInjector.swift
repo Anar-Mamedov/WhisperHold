@@ -35,9 +35,9 @@ final class TextInjector {
         // olduğunu ayırt etmenin tek yolu bu.
         let stored = pasteboard.string(forType: .string)?.count ?? -1
         if stored != text.count {
-            NSLog("Dikte: PANO UYUŞMAZLIĞI — yazılan=\(text.count) okunan=\(stored)")
+            NSLog("WhisperHold: PANO UYUŞMAZLIĞI — yazılan=\(text.count) okunan=\(stored)")
         } else {
-            NSLog("Dikte: panoya yazıldı, \(text.count) karakter")
+            NSLog("WhisperHold: panoya yazıldı, \(text.count) karakter")
         }
 
         // Şifre alanları açıkken macOS sentetik klavye olaylarını engeller.

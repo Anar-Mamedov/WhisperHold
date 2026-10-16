@@ -12,7 +12,7 @@ struct MenuBarView: View {
                 Image(systemName: controller.status.symbol)
                     .foregroundStyle(statusColor)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Dikte Original").font(.headline)
+                    Text("WhisperHold").font(.headline)
                     Text(controller.status.label)
                         .font(.caption)
                         .foregroundStyle(.secondary)

@@ -127,7 +127,7 @@ final class PythonWhisperEngine {
 
     private static var supportRoot: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("DikteOriginal", isDirectory: true)
+            .appendingPathComponent("WhisperHold", isDirectory: true)
     }
 
     static var modelCacheRoot: URL {
@@ -188,7 +188,7 @@ final class PythonWhisperEngine {
 
         let requestID = UUID().uuidString
         let audioURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("dikte-original-\(requestID).f32")
+            .appendingPathComponent("whisperhold-\(requestID).f32")
         let audioData = samples.withUnsafeBufferPointer { Data(buffer: $0) }
         try audioData.write(to: audioURL, options: .atomic)
         defer { try? FileManager.default.removeItem(at: audioURL) }
@@ -366,7 +366,7 @@ final class PythonWhisperEngine {
     /// satırına yazar. Bunu okuyup kullanıcıya sahte bir `%0` yerine gerçek
     /// yüzdeyi gösteriyoruz; protokol stdout'ta temiz kalmaya devam ediyor.
     private func consumeErrorOutput(_ text: String) {
-        NSLog("DikteOriginal Python: \(text)")
+        NSLog("WhisperHold Python: \(text)")
         guard let regex = try? NSRegularExpression(pattern: #"model\.safetensors:\s+(\d+)%"#) else {
             return
         }

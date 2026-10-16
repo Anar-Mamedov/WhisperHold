@@ -14,7 +14,7 @@ final class HotkeyMonitor {
         case tapCreationFailed
 
         var errorDescription: String? {
-            "Klavye dinlenemedi. Sistem Ayarları → Gizlilik ve Güvenlik → Girdi İzleme'den Dikte'ye izin verin."
+            "Klavye dinlenemedi. Sistem Ayarları → Gizlilik ve Güvenlik → Girdi İzleme'den WhisperHold'a izin verin."
         }
     }
 

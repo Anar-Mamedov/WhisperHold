@@ -93,7 +93,7 @@ def verify_weights(weights: Path, snapshot: Path) -> tuple[str, int]:
         "weights_bytes": size_bytes,
         "weights_mtime_ns": resolved.stat().st_mtime_ns,
     }
-    marker_root = Path(os.environ.get("HF_HOME", snapshot.parent)) / "dikte-verification"
+    marker_root = Path(os.environ.get("HF_HOME", snapshot.parent)) / "whisperhold-verification"
     marker = marker_root / f"{snapshot.name}-{expected_sha256}.json"
     try:
         if json.loads(marker.read_text(encoding="utf-8")) == identity:

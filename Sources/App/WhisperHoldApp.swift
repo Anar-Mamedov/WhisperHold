@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct DikteOriginalApp: App {
+struct WhisperHoldApp: App {
     @StateObject private var permissions: Permissions
     @StateObject private var preferences: Preferences
     @StateObject private var controller: AppController
@@ -28,7 +28,7 @@ struct DikteOriginalApp: App {
         }
         .menuBarExtraStyle(.window)
 
-        Window("Dikte Original Ayarları", id: SettingsWindow.id) {
+        Window("WhisperHold Ayarları", id: SettingsWindow.id) {
             SettingsView()
                 .environmentObject(preferences)
                 .environmentObject(controller)

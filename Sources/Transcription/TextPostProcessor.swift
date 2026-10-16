@@ -215,7 +215,7 @@ struct TextPostProcessor {
         // Kırpma sessiz olmamalı: bu süzgeç bir emniyet ağı, çözümleyicinin
         // çöktüğünü gizlemek için değil. Tetiklendiği her seferde asıl sorun
         // modelde ve kayıt arşivinden yeniden çevrilerek incelenebilir.
-        NSLog("Dikte: tekrar döngüsü kırpıldı — \(tokens.count) kelime → \(output.count)")
+        NSLog("WhisperHold: tekrar döngüsü kırpıldı — \(tokens.count) kelime → \(output.count)")
         return output.joined(separator: " ")
     }
 

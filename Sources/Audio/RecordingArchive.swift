@@ -20,7 +20,7 @@ import Foundation
 /// tercihlerini kaydettiğinde cfprefsd'nin bayat önbelleği eziyor. Klasör
 /// böyle bir yarışa girmez.
 ///
-///   Açmak için:  mkdir ~/Documents/DikteKayitlari
+///   Açmak için:  mkdir ~/Documents/WhisperHold
 ///   Kapatmak için: klasörü sil
 enum RecordingArchive {
     /// Yalnızca en yeni kayıtlar kalsın.
@@ -57,7 +57,7 @@ enum RecordingArchive {
 
     static var directory: URL {
         FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Documents/DikteKayitlari", isDirectory: true)
+            .appendingPathComponent("Documents/WhisperHold", isDirectory: true)
     }
 
     static var isEnabled: Bool {
@@ -103,7 +103,7 @@ enum RecordingArchive {
             prune()
             return url
         } catch {
-            NSLog("Dikte: ses kaydı yazılamadı — \(error)")
+            NSLog("WhisperHold: ses kaydı yazılamadı — \(error)")
             return nil
         }
     }

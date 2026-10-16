@@ -87,7 +87,7 @@ struct RecordingsSettings: View {
             VStack(alignment: .leading, spacing: 8) {
                 Label("Kayıt arşivi kapalı", systemImage: "waveform.slash")
                     .font(.callout.weight(.medium))
-                Text("Açtığında her dikte ~/Documents/DikteKayitlari klasörüne yazılır ve son \(RecordingArchive.retainCount) kayıt burada yeniden çevrilebilir. Kapatmak için klasörü silmen yeterli.")
+                Text("Açtığında her dikte ~/Documents/WhisperHold klasörüne yazılır ve son \(RecordingArchive.retainCount) kayıt burada yeniden çevrilebilir. Kapatmak için klasörü silmen yeterli.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -219,7 +219,7 @@ final class RecordingPreviewPlayer: NSObject, ObservableObject {
             playing = url
             player.play()
         } catch {
-            NSLog("Dikte: kayıt çalınamadı — \(error)")
+            NSLog("WhisperHold: kayıt çalınamadı — \(error)")
         }
     }
 

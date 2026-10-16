@@ -1,4 +1,4 @@
-# Dikte Original
+# WhisperHold
 
 Hold-to-talk dictation for macOS that runs entirely on your Mac. Hold a
 shortcut, speak, let go — the text is typed into whatever app has focus.
@@ -55,17 +55,17 @@ is needed.
 ## Build and run
 
 ```sh
-git clone https://github.com/Anar-Mamedov/speech_to_text.git
-cd speech_to_text
-open DikteOriginal.xcodeproj
+git clone https://github.com/Anar-Mamedov/WhisperHold.git
+cd WhisperHold
+open WhisperHold.xcodeproj
 ```
 
 Then press **Run** in Xcode. Or build from the command line:
 
 ```sh
-xcodebuild -project DikteOriginal.xcodeproj -scheme DikteOriginal \
+xcodebuild -project WhisperHold.xcodeproj -scheme WhisperHold \
   -configuration Release -derivedDataPath build
-open build/Build/Products/Release/DikteOriginal.app
+open build/Build/Products/Release/WhisperHold.app
 ```
 
 `project.yml` is the source of truth for the Xcode project. After editing it,
@@ -98,9 +98,9 @@ git-ignored.
 
    macOS may require restarting the app after granting Accessibility.
 2. **Wait for setup.** The app creates its own Python virtual environment in
-   `~/Library/Application Support/DikteOriginal/runtime`, then downloads the
+   `~/Library/Application Support/WhisperHold/runtime`, then downloads the
    model from Hugging Face into
-   `~/Library/Application Support/DikteOriginal/HuggingFace`. Depending on your
+   `~/Library/Application Support/WhisperHold/HuggingFace`. Depending on your
    connection this can take a while; progress is shown in the menu bar panel.
    Later launches load everything from disk.
 
@@ -142,7 +142,7 @@ Labels in the app are in Turkish; the English names are given alongside.
 
 ### Recording archive and re-transcription
 
-If the folder `~/Documents/DikteKayitlari` exists, every dictation is saved
+If the folder `~/Documents/WhisperHold` exists, every dictation is saved
 there as a WAV file and only the five most recent are kept. Create it with the
 **Arşivi aç** (Open archive) button on the Recordings tab, or with `mkdir`;
 delete the folder to turn the archive off.
@@ -237,7 +237,7 @@ project.yml       XcodeGen project definition
   with `brew install python@3.11` and choose **Modeli yeniden başlat** (Restart
   model) on the Model tab.
 - **Starting over.** Quit the app and delete
-  `~/Library/Application Support/DikteOriginal`. The Python environment and
+  `~/Library/Application Support/WhisperHold`. The Python environment and
   the model are recreated on next launch.
 
 ## Uninstall
@@ -245,8 +245,8 @@ project.yml       XcodeGen project definition
 Delete the app, then remove its data:
 
 ```sh
-rm -rf ~/Library/Application\ Support/DikteOriginal
-rm -rf ~/Documents/DikteKayitlari
+rm -rf ~/Library/Application\ Support/WhisperHold
+rm -rf ~/Documents/WhisperHold
 ```
 
 ## Contributing

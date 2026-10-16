@@ -1,4 +1,4 @@
-name: DikteOriginal
+name: WhisperHold
 
 options:
   bundleIdPrefix: com.anar
@@ -7,7 +7,7 @@ options:
   createIntermediateGroups: true
 
 targets:
-  DikteOriginal:
+  WhisperHold:
     type: application
     platform: macOS
 
@@ -22,26 +22,26 @@ targets:
       Release: Config/Signing.xcconfig
 
     entitlements:
-      path: Sources/Resources/Dikte.entitlements
+      path: Sources/Resources/WhisperHold.entitlements
       properties:
         com.apple.security.device.audio-input: true
 
     info:
       path: Sources/Resources/Info.plist
       properties:
-        CFBundleName: Dikte Original
-        CFBundleDisplayName: Dikte Original
+        CFBundleName: WhisperHold
+        CFBundleDisplayName: WhisperHold
         CFBundleShortVersionString: "0.1.0"
         CFBundleVersion: "1"
         LSUIElement: true
         NSMicrophoneUsageDescription: >-
-          Dikte Original, konuşmanızı metne çevirmek için mikrofonu kullanır.
+          WhisperHold, konuşmanızı metne çevirmek için mikrofonu kullanır.
           Ses kaydı yalnızca bu cihazda işlenir ve hiçbir sunucuya gönderilmez.
 
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.anar.dikte-original
-        PRODUCT_NAME: DikteOriginal
+        PRODUCT_BUNDLE_IDENTIFIER: com.anar.whisperhold
+        PRODUCT_NAME: WhisperHold
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
         ENABLE_APP_SANDBOX: NO
