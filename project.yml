@@ -17,6 +17,10 @@ targets:
         buildPhase: resources
         type: folder
 
+    configFiles:
+      Debug: Config/Signing.xcconfig
+      Release: Config/Signing.xcconfig
+
     entitlements:
       path: Sources/Resources/Dikte.entitlements
       properties:
@@ -42,10 +46,6 @@ targets:
         CURRENT_PROJECT_VERSION: "1"
         ENABLE_APP_SANDBOX: NO
         ENABLE_HARDENED_RUNTIME: YES
-        OTHER_CODE_SIGN_FLAGS: "--timestamp"
-        CODE_SIGN_STYLE: Manual
-        CODE_SIGN_IDENTITY: "Apple Development"
-        DEVELOPMENT_TEAM: LBPVTCYT79
         PROVISIONING_PROFILE_SPECIFIER: ""
         SWIFT_VERSION: "5.0"
         INFOPLIST_KEY_NSPrincipalClass: NSApplication

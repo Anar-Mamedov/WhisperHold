@@ -1,0 +1,7 @@
+// Copy to Config/Local.xcconfig (git-ignored) to sign with your own
+// certificate, so macOS keeps the app's permissions across rebuilds.
+// Your team ID is shown in Xcode → Settings → Accounts (a free Apple ID works).
+
+CODE_SIGN_IDENTITY = Apple Development
+DEVELOPMENT_TEAM = YOUR_TEAM_ID
+OTHER_CODE_SIGN_FLAGS = --timestamp

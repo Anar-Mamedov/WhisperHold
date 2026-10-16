@@ -37,6 +37,7 @@
 		0FEFFBD84FEBAF3E644B3065 /* IndicatorState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IndicatorState.swift; sourceTree = "<group>"; };
 		11781EDB4588D6BBCE3F1E30 /* TermCorrector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TermCorrector.swift; sourceTree = "<group>"; };
 		162792F024441F9D79408569 /* Dikte.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Dikte.entitlements; sourceTree = "<group>"; };
+		19CD42F8897782F7E25E4399 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
 		1C1A9E67E68F94EFFADB0C56 /* RecordingIndicator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingIndicator.swift; sourceTree = "<group>"; };
 		2D0596E20A512CAB38608FFD /* RecordingsSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingsSettings.swift; sourceTree = "<group>"; };
 		377C8BDDBB89F69B0BCE8440 /* HotkeyMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyMonitor.swift; sourceTree = "<group>"; };
@@ -80,10 +81,19 @@
 			path = Hotkey;
 			sourceTree = "<group>";
 		};
+		13F8FBF28C840708FB6E4408 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				19CD42F8897782F7E25E4399 /* Signing.xcconfig */,
+			);
+			path = Config;
+			sourceTree = "<group>";
+		};
 		3402A54FC05981D950D7F06D = {
 			isa = PBXGroup;
 			children = (
 				A41DB3B11352970A57B6934A /* Python */,
+				13F8FBF28C840708FB6E4408 /* Config */,
 				50FDE37955E7F13E56C616EA /* Sources */,
 				CE8F44AC315C3B60F3B02BDC /* Products */,
 			);
@@ -213,7 +223,7 @@
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
 					CB849C48B969204B6794533B = {
-						DevelopmentTeam = LBPVTCYT79;
+						DevelopmentTeam = "";
 						ProvisioningStyle = Manual;
 					};
 				};
@@ -339,14 +349,12 @@
 		};
 		6826B5E7842E897EBC5D2990 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 19CD42F8897782F7E25E4399 /* Signing.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Sources/Resources/Dikte.entitlements;
-				CODE_SIGN_IDENTITY = "Apple Development";
-				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = LBPVTCYT79;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -357,7 +365,6 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 0.1.0;
-				OTHER_CODE_SIGN_FLAGS = "--timestamp";
 				PRODUCT_BUNDLE_IDENTIFIER = "com.anar.dikte-original";
 				PRODUCT_NAME = DikteOriginal;
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -431,14 +438,12 @@
 		};
 		F7C29141ACC9C4408F26B975 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 19CD42F8897782F7E25E4399 /* Signing.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Sources/Resources/Dikte.entitlements;
-				CODE_SIGN_IDENTITY = "Apple Development";
-				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = LBPVTCYT79;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -449,7 +454,6 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 0.1.0;
-				OTHER_CODE_SIGN_FLAGS = "--timestamp";
 				PRODUCT_BUNDLE_IDENTIFIER = "com.anar.dikte-original";
 				PRODUCT_NAME = DikteOriginal;
 				PROVISIONING_PROFILE_SPECIFIER = "";

@@ -1,9 +1,0 @@
-# Bu sürümler resmî Hugging Face safetensors ağırlığını PyTorch ile doğrudan
-# çalıştırır. Core ML, MLX, ONNX, kuantizasyon veya model dönüşümü yoktur.
-torch==2.5.1
-transformers==4.46.3
-huggingface-hub==0.26.2
-accelerate==1.1.1
-safetensors==0.4.5
-numpy==2.1.3
-

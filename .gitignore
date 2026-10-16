@@ -5,3 +5,11 @@ build/
 *.xcuserstate
 xcuserdata/
 .venv/
+__pycache__/
+*.pyc
+
+# Build output; build from source instead.
+/DikteOriginal.app/
+
+# Personal signing settings (see Config/Local.xcconfig.example).
+Config/Local.xcconfig
