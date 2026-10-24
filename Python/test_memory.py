@@ -52,15 +52,40 @@ class MemoryTests(unittest.TestCase):
     def test_prompt_composition_prefers_used_and_relevant_terms_within_budget(self) -> None:
         self.memory.remember_dictation("OpenClaw'ın anahtarı OpenClaw'da kalsın.", "app", ["OpenClaw"])
         learned = ["Kubernetes", "OpenClaw", "Claude", "Terraform"]
-        prompt, chosen = self.memory.compose_prompt("Bağlam.", ["API"], learned, count_tokens, budget=14)
-        self.assertEqual(chosen[0], "OpenClaw")
-        self.assertTrue(prompt.startswith("Bağlam. Özel adlar ve teknik terimler aynen şu yazımla kullanılır: API, OpenClaw"))
+        prompt, chosen = self.memory.compose_prompt(["Bağlam."], ["API"], learned, count_tokens, budget=14)
+        # Elle yazılan (bonus) ve kullanılmış+ilgili olan ilk ikide; sıra puana göre.
+        self.assertEqual(set(chosen[:2]), {"API", "OpenClaw"})
+        self.assertTrue(prompt.startswith("Bağlam. Özel adlar ve teknik terimler aynen şu yazımla kullanılır: "))
         self.assertLessEqual(count_tokens(prompt), 14)
-        self.assertLess(len(chosen), len(learned))
+        self.assertLess(len(chosen), len(learned) + 1)
 
     def test_prompt_without_terms_is_just_the_context(self) -> None:
         prompt, chosen = self.memory.compose_prompt("Bağlam.", [], [], count_tokens)
         self.assertEqual((prompt, chosen), ("Bağlam.", []))
+
+    def test_large_manual_list_is_ranked_not_truncated_blindly(self) -> None:
+        # Elle yazılan liste bütçeyi aşıyor: kullanılmış olanlar öne geçer.
+        manual = [f"Term{i}" for i in range(40)] + ["OpenClaw"]
+        self.memory.remember_dictation("OpenClaw'ı dün kurdum.", "app", manual)
+        prompt, chosen = self.memory.compose_prompt([], manual, [], count_tokens, budget=12)
+        self.assertIn("OpenClaw", chosen[:1])
+        self.assertLessEqual(count_tokens(prompt), 12)
+
+    def test_contexts_are_stored_ranked_and_fitted(self) -> None:
+        self.memory.set_contexts(["Mobil sayfaların tasarımını konuşuyoruz.", "Anahtar ve OpenClaw kurulumu hakkında konuşuyoruz."])
+        self.memory.set_vocabulary(["OpenClaw", "API"])
+        self.assertEqual(self.memory.stats()["contexts"], 2)
+        self.assertEqual(self.memory.stats()["manual_terms"], 2)
+        self.assertEqual(self.memory.vocabulary(), ["OpenClaw", "API"])
+        self.memory.remember_dictation("OpenClaw anahtarı nerede?", "app", ["OpenClaw"])
+        prompt, _ = self.memory.compose_prompt(self.memory.contexts(), [], [], count_tokens, budget=12)
+        self.assertTrue(prompt.startswith("Anahtar ve OpenClaw"), prompt)
+        # Both fit when the budget allows; the relevant one still first.
+        prompt, _ = self.memory.compose_prompt(self.memory.contexts(), [], [], count_tokens, budget=40)
+        self.assertEqual(prompt, "Anahtar ve OpenClaw kurulumu hakkında konuşuyoruz. Mobil sayfaların tasarımını konuşuyoruz.")
+        # Replacing the list drops the removed sentence.
+        self.memory.set_contexts(["Mobil sayfaların tasarımını konuşuyoruz."])
+        self.assertEqual(self.memory.contexts(), ["Mobil sayfaların tasarımını konuşuyoruz."])
 
     def test_nearest_corrections_by_embedding_then_fallback(self) -> None:
         self.memory.remember_correction("bekleyen", "backendci", "Dokümanı bekleyen arkadaşım verdi.")

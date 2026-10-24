@@ -32,6 +32,13 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+# The embedding model is the one OpenClaw's memory search uses by default:
+# EmbeddingGemma 300M, quantization-aware Q8_0 GGUF, run with llama.cpp on
+# Metal. If llama.cpp is not installed (it compiles from source and can fail
+# on some machines), the fallback is multilingual-e5-small through
+# transformers — smaller, MIT, Turkish included.
+GEMMA_MODEL_ID = "ggml-org/embeddinggemma-300m-qat-q8_0-GGUF"
+GEMMA_FILE_PATTERN = "*.gguf"
 EMBEDDING_MODEL_ID = "intfloat/multilingual-e5-small"
 EMBEDDING_DIMENSIONS = 384
 PROMPT_TOKEN_BUDGET = 200
@@ -49,9 +56,59 @@ def term_occurs(term: str, text: str) -> bool:
     return re.search(pattern, fold(text)) is not None
 
 
+class GemmaEmbedder:
+    """EmbeddingGemma through llama.cpp, exactly the model OpenClaw ships with.
+
+    Texts are embedded as they are, no task prefixes, and normalized to unit
+    length; the GGUF is fetched once into the app's model cache.
+    """
+
+    name = GEMMA_MODEL_ID
+
+    def __init__(self) -> None:
+        import glob
+        import os
+
+        from huggingface_hub import snapshot_download
+        from llama_cpp import Llama
+
+        try:
+            snapshot = snapshot_download(GEMMA_MODEL_ID, allow_patterns=[GEMMA_FILE_PATTERN], local_files_only=True)
+        except Exception:
+            snapshot = snapshot_download(GEMMA_MODEL_ID, allow_patterns=[GEMMA_FILE_PATTERN])
+        path = sorted(glob.glob(os.path.join(snapshot, GEMMA_FILE_PATTERN)))[0]
+        self.model = Llama(model_path=path, embedding=True, n_gpu_layers=-1, n_ctx=2048, verbose=False)
+        self.device = "metal"
+
+    def encode(self, texts: list[str], kind: str = "passage") -> list[list[float]]:
+        out: list[list[float]] = []
+        for text in texts:
+            vector = self.model.embed(text)
+            if vector and isinstance(vector[0], list):
+                vector = vector[0]
+            norm = math.sqrt(sum(value * value for value in vector)) or 1.0
+            out.append([value / norm for value in vector])
+        return out
+
+
+def make_embedder() -> Any:
+    """EmbeddingGemma when llama.cpp is importable, otherwise the fallback."""
+    try:
+        import llama_cpp  # noqa: F401
+    except Exception:  # noqa: BLE001
+        return Embedder()
+    try:
+        return GemmaEmbedder()
+    except Exception as error:  # noqa: BLE001
+        print(f"hafıza: EmbeddingGemma yüklenemedi ({error}); yedek modele geçiliyor", file=sys.stderr, flush=True)
+        return Embedder()
+
+
 class Embedder:
     """multilingual-e5-small on the GPU: `query:` for what we search with,
     `passage:` for what is stored, mean pooling, unit length."""
+
+    name = EMBEDDING_MODEL_ID
 
     def __init__(self) -> None:
         import torch
@@ -108,7 +165,7 @@ class Memory:
                  embedder_factory: Callable[[], Any] | None = None) -> None:
         self.path = path
         self.emit = emit or (lambda message: None)
-        self.embedder_factory = embedder_factory or Embedder
+        self.embedder_factory = embedder_factory or make_embedder
         self.lock = threading.RLock()
         path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(str(path), check_same_thread=False)
@@ -134,6 +191,11 @@ class Memory:
                     UNIQUE(wrong, right));
                 CREATE TABLE IF NOT EXISTS term_usage(
                     term TEXT PRIMARY KEY, count INTEGER NOT NULL DEFAULT 0, last_used REAL NOT NULL);
+                CREATE TABLE IF NOT EXISTS vocabulary(
+                    term TEXT PRIMARY KEY, source TEXT NOT NULL, position INTEGER NOT NULL DEFAULT 0, added_at REAL NOT NULL);
+                CREATE TABLE IF NOT EXISTS contexts(
+                    id INTEGER PRIMARY KEY, text TEXT NOT NULL UNIQUE, position INTEGER NOT NULL DEFAULT 0,
+                    added_at REAL NOT NULL, embedding BLOB);
                 """
             )
             # Full-text copies hold folded text (lowercase, dotless ı → i), so a
@@ -171,7 +233,7 @@ class Memory:
             embedder = self.embedder_factory()
             with self.lock:
                 self.embedder = embedder
-            self.report("ready", EMBEDDING_MODEL_ID)
+            self.report("ready", getattr(embedder, "name", EMBEDDING_MODEL_ID))
             self.backfill()
         except Exception as error:  # noqa: BLE001
             self.report("failed", f"Embedding modeli yüklenemedi: {error}")
@@ -181,7 +243,7 @@ class Memory:
         with self.lock:
             if self.embedder is None:
                 return
-            for table, column in (("dictations", "text"), ("corrections", "context")):
+            for table, column in (("dictations", "text"), ("corrections", "context"), ("contexts", "text")):
                 rows = self.db.execute(
                     f"SELECT id, {column} AS text FROM {table} WHERE embedding IS NULL ORDER BY id DESC LIMIT ?", (limit,)
                 ).fetchall()
@@ -262,6 +324,45 @@ class Memory:
             if self.fts:
                 self.db.execute("DELETE FROM corrections_fts WHERE rowid = ?", (row_id,))
 
+    def set_vocabulary(self, terms: list[str], source: str = "manual") -> None:
+        """Replace the user's hand-written list (idempotent; order is kept as priority)."""
+        now = time.time()
+        with self.lock:
+            self.db.execute("DELETE FROM vocabulary WHERE source = ?", (source,))
+            for position, term in enumerate(dict.fromkeys(t.strip() for t in terms if t.strip())):
+                self.db.execute(
+                    "INSERT OR REPLACE INTO vocabulary(term, source, position, added_at) VALUES (?, ?, ?, ?)",
+                    (term, source, position, now),
+                )
+            self.db.commit()
+
+    def set_contexts(self, texts: list[str]) -> None:
+        """Replace the user's context sentences; embeddings of unchanged ones are kept."""
+        now = time.time()
+        wanted = list(dict.fromkeys(t.strip() for t in texts if t.strip()))
+        with self.lock:
+            existing = {row["text"] for row in self.db.execute("SELECT text FROM contexts")}
+            for text in existing - set(wanted):
+                self.db.execute("DELETE FROM contexts WHERE text = ?", (text,))
+            for position, text in enumerate(wanted):
+                if text in existing:
+                    self.db.execute("UPDATE contexts SET position = ? WHERE text = ?", (position, text))
+                else:
+                    self.db.execute(
+                        "INSERT INTO contexts(text, position, added_at, embedding) VALUES (?, ?, ?, ?)",
+                        (text, position, now, self._embed(text)),
+                    )
+            self.db.commit()
+
+    def vocabulary(self, source: str = "manual") -> list[str]:
+        with self.lock:
+            return [row["term"] for row in self.db.execute(
+                "SELECT term FROM vocabulary WHERE source = ? ORDER BY position", (source,))]
+
+    def contexts(self) -> list[str]:
+        with self.lock:
+            return [row["text"] for row in self.db.execute("SELECT text FROM contexts ORDER BY position")]
+
     def forget_correction(self, wrong: str, right: str) -> None:
         with self.lock:
             self._delete_corrections("wrong = ? COLLATE NOCASE AND right = ?", (wrong, right))
@@ -287,9 +388,14 @@ class Memory:
                 "SELECT (SELECT COUNT(*) FROM dictations WHERE embedding IS NOT NULL) + "
                 "(SELECT COUNT(*) FROM corrections WHERE embedding IS NOT NULL)"
             ).fetchone()[0]
+        with self.lock:
+            manual = self.db.execute("SELECT COUNT(*) FROM vocabulary WHERE source = 'manual'").fetchone()[0]
+            contexts = self.db.execute("SELECT COUNT(*) FROM contexts").fetchone()[0]
         return {
             "dictations": dictations,
             "corrections": corrections,
+            "manual_terms": manual,
+            "contexts": contexts,
             "embedded": embedded,
             "embedder": self.embedder_state,
             "detail": self.embedder_detail,
@@ -314,18 +420,29 @@ class Memory:
                 rows.extend(row for row in candidates if term_occurs(term, row["text"]))
         return rows
 
-    def rank_learned_terms(self, learned: list[str], query: str | None = None) -> list[tuple[str, float]]:
-        """Learned terms scored by usage, recency and relevance to the query."""
+    MANUAL_BONUS = 1.5
+
+    def rank_terms(self, terms: list[tuple[str, str]], query: str | None = None) -> list[tuple[str, float]]:
+        """Terms scored by usage, recency and relevance to the query.
+
+        `terms` are (term, source) pairs; hand-written terms carry a bonus so
+        that, at equal relevance, what the user typed goes in before what was
+        learned. Relevance is the similarity between the query (the latest
+        dictations) and the sentences the term was seen in.
+        """
         now = time.time()
         query_vector = self._query_vector(query) if query else None
         query_words = set(fold(query or "").split())
         scored: list[tuple[str, float]] = []
         with self.lock:
             usage = {row["term"]: (row["count"], row["last_used"]) for row in self.db.execute("SELECT * FROM term_usage")}
-        for index, term in enumerate(learned):
+        total = max(1, len(terms))
+        for index, (term, source) in enumerate(terms):
             count, last_used = usage.get(term, (0, 0.0))
             days = (now - last_used) / 86400 if last_used else 365.0
-            score = math.log1p(count) + max(0.0, 1.0 - days / 30.0) + max(0.0, 0.5 - index / len(learned) * 0.5)
+            score = math.log1p(count) + max(0.0, 1.0 - days / 30.0) + max(0.0, 0.5 - index / total * 0.5)
+            if source == "manual":
+                score += self.MANUAL_BONUS
             relevance = 0.0
             for row in self._rows_mentioning(term):
                 if query_vector is not None and row["embedding"] is not None:
@@ -337,41 +454,102 @@ class Memory:
         scored.sort(key=lambda item: -item[1])
         return scored
 
-    def compose_prompt(self, context: str, terms: list[str], learned: list[str],
+    def rank_contexts(self, contexts: list[str], query: str | None = None) -> list[str]:
+        """Context sentences, most relevant to the latest dictations first;
+        without a signal, in the user's order."""
+        if len(contexts) <= 1:
+            return list(contexts)
+        query_vector = self._query_vector(query) if query else None
+        query_words = set(fold(query or "").split())
+        with self.lock:
+            stored = {row["text"]: row["embedding"] for row in self.db.execute("SELECT text, embedding FROM contexts")}
+        scored = []
+        for position, text in enumerate(contexts):
+            relevance = 0.0
+            blob = stored.get(text)
+            if query_vector is not None and blob is not None:
+                relevance = _dot(query_vector, _unpack(blob))
+            elif query_words:
+                relevance = min(1.0, len(query_words & set(fold(text).split())) / 4.0)
+            scored.append((relevance - position * 0.01, text))
+        scored.sort(key=lambda item: -item[0])
+        return [text for _, text in scored]
+
+    def compose_prompt(self, contexts: list[str] | str, terms: list[str], learned: list[str],
                        count_tokens: Callable[[str], int], budget: int = PROMPT_TOKEN_BUDGET) -> tuple[str, list[str]]:
-        """The context sentence, every hand-written term, then learned terms by
-        rank until the token budget is used. Returns the prompt and the learned
-        terms that made it in."""
-        context = context.strip()
+        """Context sentences and terms chosen for this dictation within the budget.
 
-        def build(selected: list[str]) -> str:
-            all_terms = terms + selected
-            if not all_terms:
-                return context
-            suffix = "Özel adlar ve teknik terimler aynen şu yazımla kullanılır: " + ", ".join(all_terms) + "."
-            return suffix if not context else context + " " + suffix
+        Order of filling: the most relevant context sentence first, then terms
+        by rank (hand-written ones carry a bonus), then further context
+        sentences if room is left. Returns the prompt and the terms it holds.
+        """
+        if isinstance(contexts, str):
+            contexts = [contexts] if contexts.strip() else []
+        query = " ".join(self.recent_dictations())
+        ordered_contexts = self.rank_contexts([c.strip() for c in contexts if c.strip()], query)
+        pairs = [(term, "manual") for term in dict.fromkeys(terms) if term.strip()]
+        seen = {term for term, _ in pairs}
+        pairs += [(term, "learned") for term in dict.fromkeys(learned) if term.strip() and term not in seen]
+        ranked = [term for term, _ in self.rank_terms(pairs, query)]
 
-        ranked = [term for term, _ in self.rank_learned_terms(learned, " ".join(self.recent_dictations()))]
+        def build(context_parts: list[str], selected: list[str]) -> str:
+            text = " ".join(context_parts)
+            if not selected:
+                return text
+            suffix = "Özel adlar ve teknik terimler aynen şu yazımla kullanılır: " + ", ".join(selected) + "."
+            return suffix if not text else text + " " + suffix
+
+        chosen_contexts = ordered_contexts[:1]
+        if chosen_contexts and count_tokens(build(chosen_contexts, [])) > budget:
+            chosen_contexts = []
         chosen: list[str] = []
         for term in ranked:
-            candidate = chosen + [term]
-            if count_tokens(build(candidate)) > budget:
-                continue
-            chosen = candidate
-        return build(chosen), chosen
+            if count_tokens(build(chosen_contexts, chosen + [term])) <= budget:
+                chosen.append(term)
+        for extra in ordered_contexts[1:]:
+            if count_tokens(build(chosen_contexts + [extra], chosen)) <= budget:
+                chosen_contexts.append(extra)
+        return build(chosen_contexts, chosen), chosen
+
+    VECTOR_WEIGHT = 0.7
+    KEYWORD_WEIGHT = 0.3
+
+    def _keyword_scores(self, text: str, limit: int = 50) -> dict[int, float]:
+        """BM25 ranks from full-text search, mapped to 1.0 … 0.0 by rank."""
+        if not self.fts:
+            return {}
+        words = [word for word in set(re.findall(r"\w+", fold(text))) if len(word) > 3]
+        if not words:
+            return {}
+        match = " OR ".join(f'"{word}"' for word in words[:40])
+        with self.lock:
+            try:
+                hits = self.db.execute(
+                    "SELECT rowid FROM corrections_fts WHERE corrections_fts MATCH ? ORDER BY bm25(corrections_fts) LIMIT ?",
+                    (match, limit),
+                ).fetchall()
+            except sqlite3.OperationalError:
+                return {}
+        return {row[0]: 1.0 - index / max(1, len(hits)) for index, row in enumerate(hits)}
 
     def nearest_corrections(self, text: str, limit: int = MAX_EXAMPLES) -> list[dict[str, str]]:
-        """Past corrections whose sentences are most like this transcript."""
+        """Past corrections whose sentences are most like this transcript.
+
+        Hybrid, the way OpenClaw's memory search blends its results: vector
+        similarity weighted 0.7 and keyword (BM25) rank weighted 0.3. Without
+        embeddings it is keyword-only; without keywords, recency.
+        """
         query_vector = self._query_vector(text)
         with self.lock:
             rows = self.db.execute("SELECT wrong, right, context, embedding, id FROM corrections ORDER BY id DESC LIMIT 2000").fetchall()
         if not rows:
             return []
+        keyword = self._keyword_scores(text)
         if query_vector is not None and any(row["embedding"] is not None for row in rows):
-            scored = [
-                (_dot(query_vector, _unpack(row["embedding"])) if row["embedding"] is not None else -1.0, row)
-                for row in rows
-            ]
+            scored = []
+            for row in rows:
+                vector = _dot(query_vector, _unpack(row["embedding"])) if row["embedding"] is not None else 0.0
+                scored.append((self.VECTOR_WEIGHT * vector + self.KEYWORD_WEIGHT * keyword.get(row["id"], 0.0), row))
             scored.sort(key=lambda item: -item[0])
             picked = [row for _, row in scored[:limit]]
         elif self.fts:

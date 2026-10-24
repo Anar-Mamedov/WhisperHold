@@ -202,7 +202,7 @@ private struct VocabularySettings: View {
     var body: some View {
         ScrollingTab {
             VStack(alignment: .leading, spacing: 10) {
-                sectionTitle("Bağlam cümlesi", detail: "Whisper'ın resmî initial prompt mekanizmasına gönderilir. Konuyu ve teknik üslubu doğal cümlelerle anlat.")
+                sectionTitle("Bağlam cümleleri", detail: "Whisper'ın resmî initial prompt mekanizmasına gönderilir. Konuları doğal cümlelerle anlat, satır başına bir cümle; sınır yok. Hepsi hafızaya yazılır ve her diktede son diktelere en yakın olanı prompt'a girer, yer kaldıkça diğerleri eklenir.")
                 TextEditor(text: $preferences.contextPrompt)
                     .font(.system(.body, design: .monospaced))
                     .frame(minHeight: 100)
@@ -214,9 +214,11 @@ private struct VocabularySettings: View {
                 .controlSize(.small)
 
                 Divider().padding(.vertical, 4)
-                sectionTitle("Teknik terimler", detail: "Prompt'a eklenir; ayrıca modelin yakın yazdığı biçimler (bild → build, komponentleri → component'leri) çıktıdan sonra düzeltilir. Seçili dilin yazım sözlüğünde bulunan gerçek kelimelere dokunulmaz.")
-                TextField("build, component, API, publish…", text: $preferences.vocabulary)
+                sectionTitle("Teknik terimler", detail: "Virgülle ayır; sınır yok. Hepsi hafızaya yazılır: her diktede prompt bütçesine en çok kullandığın ve son diktelere en yakın olanlar girer, tamamı yönlendirmede ve düzeltmede kullanılır (bild → build, komponentleri → component'leri). Seçili dilin yazım sözlüğünde bulunan gerçek kelimelere dokunulmaz.")
+                TextEditor(text: $preferences.vocabulary)
                     .font(.system(.body, design: .monospaced))
+                    .frame(minHeight: 70)
+                    .border(.separator)
                 Button("Yazılım terimlerini doldur") {
                     preferences.vocabulary = Preferences.sampleTechnicalTerms
                 }

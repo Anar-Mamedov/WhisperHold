@@ -193,7 +193,9 @@ final class PythonWhisperEngine {
     /// seçtikleri bütçe doldukça eklenir (bkz. `memory.py`). Yönlendirme ise
     /// listenin tamamını ve istenirse yerleşik sözlüğü kullanır.
     struct Vocabulary {
-        var context = ""
+        /// Bağlam cümleleri, satır başına bir tane; hafıza her diktede en
+        /// ilgilisini seçer, sığdıkça diğerlerini ekler.
+        var contexts: [String] = []
         var terms: [String] = []
         var learned: [String] = []
         var useBuiltIn = true
@@ -233,7 +235,7 @@ final class PythonWhisperEngine {
                     "command": "transcribe",
                     "audio_path": audioURL.path,
                     "language": language,
-                    "context": vocabulary.context,
+                    "contexts": vocabulary.contexts,
                     "prompt_terms": vocabulary.terms,
                     "learned_terms": vocabulary.learned,
                     "bias_terms": vocabulary.biasTerms ?? (vocabulary.terms + vocabulary.learned),

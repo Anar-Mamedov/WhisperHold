@@ -1,0 +1,4 @@
+# İsteğe bağlı: hafızanın EmbeddingGemma modelini (OpenClaw ile aynı GGUF)
+# çalıştıran llama.cpp. Kaynaktan derlenir (Metal); kurulamazsa hafıza
+# transformers tabanlı yedek modele (multilingual-e5-small) düşer.
+llama-cpp-python==0.3.36

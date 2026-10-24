@@ -143,6 +143,15 @@ final class Preferences: ObservableObject {
         return merged
     }
 
+    /// Bağlam cümleleri: alandaki her satır bir cümle. Sınır yok; hafıza her
+    /// dikte için en ilgili olanı seçer.
+    var contextSentences: [String] {
+        contextPrompt
+            .split(whereSeparator: { $0.isNewline })
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
     var technicalTerms: [String] {
         vocabulary
             .split(whereSeparator: { $0 == "," || $0 == "\n" })

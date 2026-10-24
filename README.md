@@ -44,16 +44,18 @@ is needed.
   prompt, the biasing, the corrector and smart correction all know it next
   time. If the word the app wrote was itself a real Turkish word, it is not
   turned into a blind replacement: you may really mean it next time.
-- **Local memory with semantic search.** Dictations and corrections are
-  kept in a SQLite database next to the models, indexed with SQLite's
-  full-text search and with sentence embeddings from a small local model
-  (multilingual-e5-small, MIT, downloaded once). Whisper's prompt only holds
-  about 223 tokens, so once the learned vocabulary outgrows it the memory
-  chooses which learned terms go in for *this* dictation: the ones you use
-  most, most recently, and in contexts closest to what you were just
+- **Local memory with semantic search.** Your context sentences, your term
+  list, learned corrections and dictations are kept in a SQLite database
+  next to the models, indexed with SQLite's full-text search and with
+  sentence embeddings from EmbeddingGemma 300M — the same quantized GGUF
+  OpenClaw's memory search uses, run with llama.cpp on Metal (fallback:
+  multilingual-e5-small through PyTorch). Whisper's prompt only holds about
+  223 tokens, so the lists can be as long as you like: for *each* dictation
+  the memory picks the context sentence and the terms that fit — the ones
+  you use most, most recently, and in contexts closest to what you were just
   dictating. Smart correction gets your past corrections whose sentences are
-  most similar to the new transcript as worked examples. Nothing leaves the
-  machine; the Vocabulary tab shows the counts and can wipe it.
+  most similar to the new transcript, scored like OpenClaw does (vector
+  similarity 0.7, keyword rank 0.3). Nothing leaves the machine.
 - **Smart correction (optional).** A local language model (Qwen3-4B-Instruct,
   Apache-2.0, downloaded once) reads the finished sentence and proposes
   replacements for software terms the recognizer turned into similar-sounding
@@ -83,8 +85,8 @@ is needed.
 - Xcode 15 or later
 - Python 3 — 3.11 is preferred: `brew install python@3.11`
 - About 4.5 GB of free disk space: ~0.9 GB for the Python environment,
-  ~2.9 GB for Whisper and ~0.5 GB for the memory's embedding model; another
-  8 GB if you turn on smart correction
+  ~2.9 GB for Whisper and ~0.3–0.5 GB for the memory's embedding model;
+  another 8 GB if you turn on smart correction
 - [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`),
   only if you change `project.yml`
 
@@ -187,8 +189,9 @@ Labels in the app are in Turkish; the English names are given alongside.
 
 ### Vocabulary
 
-- **Context sentence** — a natural sentence about what you usually talk about.
-  Whisper uses it as a hint for style and topic.
+- **Context sentences** — natural sentences about what you usually talk
+  about, one per line, as many as you like. Whisper uses the selected one as
+  a hint for style and topic.
 - **Technical terms** — comma-separated spellings you want, such as
   `GitHub, Xcode, PyTorch`. They are added to the prompt and used to correct
   near-misses afterwards: `bild` → `build`, `komit` → `commit`, and glued
@@ -241,19 +244,27 @@ Labels in the app are in Turkish; the English names are given alongside.
   **Düzeltmeyi öğret** — the same learning applies. The list is in the
   Vocabulary tab; any entry can be forgotten there.
 - **Memory** (`memory.sqlite` in the app's support folder) — on by default.
-  Every dictation and every learned correction is stored, with an embedding
-  when the embedding model is loaded (it loads next to Whisper in a few
-  seconds; rows stored before that are embedded afterwards). The worker
-  composes each prompt from the context sentence, all hand-written terms and
-  the best-ranked learned terms until the token budget is full; the ranking
-  adds usage count, recency and the similarity between the last few
-  dictations and the sentences a term was seen in. For smart correction the
-  eight past corrections most similar to the transcript are shown to the
-  model as examples — a correction you made once ("Cloudy" → "Claude") is
-  applied in the next similar sentence. If the app cannot reach the worker
-  (it is unloaded after 90 s idle), memory writes wait in a queue and are
-  sent when it starts again. "Dikteleri hafızada tut" turns storage off;
-  "Hafızayı temizle" deletes it.
+  Context sentences (one per line, no limit), the hand-written term list
+  (no limit), every learned correction and every dictation are stored, with
+  an embedding once the embedding model is loaded (a few seconds after
+  Whisper; rows stored before that are embedded afterwards). The worker
+  composes each prompt within the token budget: the context sentence most
+  related to your last dictations, then terms ranked by usage, recency and
+  the similarity of the sentences they were seen in — hand-written terms
+  carry a bonus, so they come first at equal relevance — then further
+  context sentences if room is left. For smart correction the eight past
+  corrections most similar to the transcript are shown to the model as
+  examples — a correction you made once ("Cloudy" → "Claude") is applied in
+  the next similar sentence. If the app cannot reach the worker (it is
+  unloaded after 90 s idle), memory writes wait in a queue and are sent when
+  it starts again. "Dikteleri hafızada tut" turns storage off; "Hafızayı
+  temizle" deletes it.
+- **Embedding model.** `Python/requirements-optional.txt` installs
+  llama.cpp (`llama-cpp-python`, compiled from source with Metal) so the
+  memory can run `ggml-org/embeddinggemma-300m-qat-q8_0-GGUF` (~330 MB).
+  If that package cannot be built on a machine, setup continues and the
+  memory uses `intfloat/multilingual-e5-small` through PyTorch instead; the
+  Vocabulary tab shows which one is active.
 - **Replacements** — exact `wrong → right` pairs for words the model
   consistently gets wrong.
 
@@ -380,6 +391,7 @@ Python/
   software_terms.txt  built-in software vocabulary
   install_runtime.sh  creates the virtual environment
   requirements.txt    pinned Python dependencies
+  requirements-optional.txt  llama.cpp for EmbeddingGemma (setup continues without it)
 Config/           code signing settings
 project.yml       XcodeGen project definition
 ```

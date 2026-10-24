@@ -387,20 +387,20 @@ final class AppController: ObservableObject {
     /// olan — kullanıcı neyin çıktığını görebilsin diye.
     private func transcribeWithFallback(_ samples: [Float]) async throws -> (raw: String, text: String?) {
         let vocabulary = PythonWhisperEngine.Vocabulary(
-            context: preferences.contextPrompt,
+            contexts: preferences.contextSentences,
             terms: preferences.technicalTerms,
             learned: preferences.learnedTerms,
             useBuiltIn: preferences.useBuiltInVocabulary
         )
         let raw = try await engine.transcribe(samples: samples, language: preferences.language, vocabulary: vocabulary)
         if let text = await polish(raw, smart: true) { return (raw, text) }
-        guard !preferences.whisperPrompt.isEmpty else { return (raw, nil) }
+        guard !preferences.contextSentences.isEmpty || !preferences.allTerms.isEmpty else { return (raw, nil) }
 
         AppLog.write("ilk sonuç atıldı, prompt'suz yeniden deneniyor")
         // Prompt'suz: bağlam ve terimler boş, yönlendirme yine açık.
         var bare = vocabulary
         bare.biasTerms = vocabulary.terms + vocabulary.learned
-        bare.context = ""
+        bare.contexts = []
         bare.terms = []
         bare.learned = []
         let retry = try await engine.transcribe(samples: samples, language: preferences.language, vocabulary: bare)

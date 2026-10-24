@@ -407,28 +407,38 @@ def build_prompt(request: dict[str, Any], processor: Any, runtime: dict[str, Any
     that only carries `prompt` (older app builds, or the no-prompt retry) is
     used as is.
     """
-    if "context" not in request and "prompt_terms" not in request:
+    if "context" not in request and "contexts" not in request and "prompt_terms" not in request:
         return str(request.get("prompt") or "")
-    context = str(request.get("context") or "")
+    contexts = [str(c) for c in request.get("contexts") or [] if str(c).strip()]
+    if not contexts and str(request.get("context") or "").strip():
+        contexts = [line.strip() for line in str(request["context"]).splitlines() if line.strip()]
     prompt_terms = [str(term) for term in request.get("prompt_terms") or [] if str(term).strip()]
     learned = [str(term) for term in request.get("learned_terms") or [] if str(term).strip()]
     store = runtime.get("memory")
     if store is None:
         all_terms = prompt_terms + learned
+        context = " ".join(contexts)
         if not all_terms:
             return context
         return (context + " " if context else "") + "Özel adlar ve teknik terimler aynen şu yazımla kullanılır: " + ", ".join(all_terms) + "."
 
+    # The hand-written list and the context sentences live in memory too, so
+    # they can grow without limit; the request carries the current versions.
+    if "prompt_terms" in request:
+        store.set_vocabulary(prompt_terms)
+    if "contexts" in request or "context" in request:
+        store.set_contexts(contexts)
+
     def count_tokens(text: str) -> int:
         return int(len(processor.get_prompt_ids(text))) if text.strip() else 0
 
-    prompt, chosen = store.compose_prompt(context, prompt_terms, learned, count_tokens)
-    if learned:
-        print(
-            f"prompt: {len(prompt_terms)} yazılı + {len(chosen)}/{len(learned)} öğrenilen terim, {count_tokens(prompt)} token",
-            file=sys.stderr,
-            flush=True,
-        )
+    prompt, chosen = store.compose_prompt(contexts, prompt_terms, learned, count_tokens)
+    print(
+        f"prompt: {len(chosen)}/{len(prompt_terms) + len(learned)} terim ({len(prompt_terms)} yazılı, {len(learned)} öğrenilen), "
+        f"{len(contexts)} bağlam cümlesi, {count_tokens(prompt)} token",
+        file=sys.stderr,
+        flush=True,
+    )
     return prompt
 
 
