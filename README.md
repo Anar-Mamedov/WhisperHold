@@ -51,7 +51,7 @@ is needed.
   Intel macOS builds.
 - Xcode 15 or later
 - Python 3 — 3.11 is preferred: `brew install python@3.11`
-- About 3.5 GB of free disk space: ~0.6 GB for the Python environment and
+- About 4 GB of free disk space: ~0.9 GB for the Python environment and
   ~2.9 GB for the model
 - [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`),
   only if you change `project.yml`
@@ -84,6 +84,14 @@ directly, so running them never launches the app or asks for permissions:
 ```sh
 xcodebuild test -project WhisperHold.xcodeproj -scheme WhisperHold \
   -destination 'platform=macOS'
+```
+
+The Python worker's model-free helpers (weight verification, the long-form
+fallback heuristic) have unit tests too; they run with the app's own
+environment:
+
+```sh
+cd Python && ~/Library/Application\ Support/WhisperHold/runtime/.venv/bin/python3 -m unittest test_whisper_worker
 ```
 
 ### Code signing
@@ -225,10 +233,15 @@ worker process that loads the model once and talks to the app over
 line-delimited JSON. The app installs and manages that worker itself; you never
 need to run Python by hand.
 
-Decoding uses Transformers' sequential long-form algorithm rather than chunked
-inference, with a temperature ladder (`0.0, 0.4, 0.8`) that only engages when a
-segment's compression ratio signals a repetition loop. The reasoning behind
-each setting is documented in `Python/whisper_worker.py`.
+Decoding calls the model's `generate` directly, using Transformers' sequential
+long-form algorithm rather than chunked inference, with greedy decoding and a
+temperature ladder (`0.0, 0.4, 0.8`) that only engages when a segment's
+compression ratio signals a repetition loop. The reasoning behind each setting
+is documented in `Python/whisper_worker.py`. The worker does not go through
+Transformers' speech-recognition pipeline: since 4.5x that pipeline silently
+applies its own `num_beams=5` and `max_new_tokens=256` defaults when the
+checkpoint sets neither, which is exactly the beam search measured below as
+slower and less faithful.
 
 A few settings are deliberately *not* used, because they were measured and
 lost. Beam search (5 beams, the Whisper CLI default) was compared with greedy

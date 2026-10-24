@@ -49,8 +49,8 @@ COMPRESSION_RATIO_THRESHOLD = 1.35
 # Deliberately NOT set: logprob_threshold and no_speech_threshold. Both fire on
 # perfectly healthy short dictation and walk every clip up the whole ladder —
 # the same 18.5 s recording takes 2.9 s without them and 21.7 s with them, for
-# identical text. In transformers 4.46.3 no_speech_threshold without
-# logprob_threshold also raises UnboundLocalError.
+# identical text. (Under transformers 4.46.3 no_speech_threshold without
+# logprob_threshold also raised UnboundLocalError.)
 #
 # Deliberately NOT set either: num_beams. Beam search (5 beams, Whisper's own
 # CLI default) was measured against greedy on the five archived recordings
@@ -94,6 +94,28 @@ def fail_fatally(error: BaseException) -> None:
     )
 
 
+def content_address(weights: Path) -> str | None:
+    """The SHA-256 Hugging Face used to name this file's blob, or None.
+
+    The snapshot entry is a symlink into `blobs/<sha256>`. Since huggingface-hub
+    2.x that blob may itself be a symlink into a shared, content-defined store
+    whose file names are Xet hashes — also 64 hex characters, but not the
+    SHA-256 of the file. Following every link to the end therefore picks up the
+    wrong name and makes a healthy download fail verification; the first hop is
+    the one that carries the SHA-256.
+    """
+    current = weights
+    for _ in range(8):
+        if len(current.name) == 64 and all(
+            character in "0123456789abcdef" for character in current.name
+        ):
+            return current.name
+        if not current.is_symlink():
+            return None
+        current = current.parent / Path(os.readlink(current))
+    return None
+
+
 def verify_weights(weights: Path, snapshot: Path) -> tuple[str, int]:
     """Verify once, then reuse a file-identity marker on later cold starts."""
     size_bytes = weights.stat().st_size
@@ -102,10 +124,8 @@ def verify_weights(weights: Path, snapshot: Path) -> tuple[str, int]:
             f"model.safetensors beklenenden küçük ({size_bytes} bayt); tam large-v3 doğrulanamadı."
         )
 
-    expected_sha256 = weights.resolve().name
-    if len(expected_sha256) != 64 or any(
-        character not in "0123456789abcdef" for character in expected_sha256
-    ):
+    expected_sha256 = content_address(weights)
+    if expected_sha256 is None:
         raise RuntimeError("Hugging Face içerik adresli safetensors özeti bulunamadı.")
 
     resolved = weights.resolve()
@@ -151,7 +171,7 @@ def load_runtime() -> tuple[Any, Any, Any, str, str, dict[str, Any]]:
     import numpy as np
     import torch
     from huggingface_hub import snapshot_download
-    from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
+    from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
 
     # Only skip duplicate framework formats (pytorch_model.bin/flax/tf). The
     # exact safetensors checkpoint published by OpenAI is downloaded as-is.
@@ -207,8 +227,7 @@ def load_runtime() -> tuple[Any, Any, Any, str, str, dict[str, Any]]:
         snapshot_path,
         local_files_only=True,
         use_safetensors=True,
-        torch_dtype=dtype,
-        low_cpu_mem_usage=True,
+        dtype=dtype,
     )
     model.eval()
     parameter_count = sum(parameter.numel() for parameter in model.parameters())
@@ -224,38 +243,31 @@ def load_runtime() -> tuple[Any, Any, Any, str, str, dict[str, Any]]:
     # üretilmeli; aksi hâlde Transformers güvenilirlik uyarısı veriyor.
     processor.feature_extractor.return_attention_mask = True
 
-    # No chunk_length_s: Whisper's own sequential long-form algorithm handles
-    # audio longer than 30 s.
+    # The model is driven through `generate` directly, not through transformers'
+    # automatic-speech-recognition pipeline. The pipeline was dropped after a
+    # measurement: from transformers 4.5x on it silently applies its own
+    # generation defaults whenever the checkpoint does not set them —
+    # `num_beams=5` and `max_new_tokens=256` — and this checkpoint sets
+    # neither. Every dictation was then decoded with beam search, which on
+    # these recordings had already been measured as slower (2–3x) and less
+    # faithful ("abi" → "ağabey"), and every 30 s window was capped at 256
+    # tokens. Calling `generate` ourselves leaves no hidden defaults.
     #
-    # The difference that matters is where the cut falls. Chunking slices at a
-    # fixed 22 s step regardless of what is being said, decodes each slice
-    # independently, and stitches the pieces by overlap; a sentence straddling a
-    # cut is decoded twice from two half-contexts. Sequential decoding instead
-    # advances to the end of the last segment the model itself closed, so a cut
-    # lands between segments rather than inside one. On one 50 s recording the
-    # chunked path turned a disfluent stretch into the same phrase repeated 31
-    # times and swallowed the real speech after it; sequential decodes it
-    # correctly and identically on repeated runs.
+    # No chunking either: Whisper's own sequential long-form algorithm handles
+    # audio longer than 30 s. The difference that matters is where the cut
+    # falls. Chunking slices at a fixed step regardless of what is being said,
+    # decodes each slice independently and stitches by overlap; a sentence
+    # straddling a cut is decoded twice from two half-contexts. Sequential
+    # decoding advances to the end of the last segment the model itself
+    # closed, so a cut lands between segments rather than inside one. On one
+    # 50 s recording the chunked path turned a disfluent stretch into the same
+    # phrase repeated 31 times and swallowed the real speech after it;
+    # sequential decodes it correctly and identically on repeated runs.
     #
     # It does NOT feed the previous window's text to the next one: that is
-    # `condition_on_prev_tokens`, which stays off here (transformers resolves it
-    # to None and takes the prompt-only branch). Turning it on would carry a bad
-    # window's text forward into the next, which is a different trade entirely.
-    #
-    # Measured on the five archived recordings, sequential is better on every
-    # axis that matters here: the same transcript on repeated runs (chunked
-    # varied wildly on the failing file), closer to what was actually said, and
-    # no slower — 9.8 s vs 12.5 s on the 50 s file, 2.2 s vs 2.0 s on a 11.6 s
-    # one. Transformers itself warns that chunking "is very experimental with
-    # seq2seq models" and costs accuracy.
-    asr = pipeline(
-        "automatic-speech-recognition",
-        model=model,
-        tokenizer=processor.tokenizer,
-        feature_extractor=processor.feature_extractor,
-        torch_dtype=dtype,
-        device=device,
-    )
+    # `condition_on_prev_tokens`, which stays off here. Turning it on would
+    # carry a bad window's text forward into the next, a different trade.
+    model.to(device)
 
     verification = {
         "model_id": MODEL_ID,
@@ -274,7 +286,7 @@ def load_runtime() -> tuple[Any, Any, Any, str, str, dict[str, Any]]:
         "transformers_version": __import__("transformers").__version__,
         "torch_version": torch.__version__,
     }
-    return np, torch, processor, device, snapshot_path, {"asr": asr, **verification}
+    return np, torch, processor, device, snapshot_path, {"model": model, "dtype_torch": dtype, **verification}
 
 
 def make_prompt(processor: Any, prompt: str, torch: Any, device: str) -> Any | None:
@@ -296,8 +308,8 @@ def make_prompt(processor: Any, prompt: str, torch: Any, device: str) -> Any | N
     return prompt_ids.to(torch.device(device))
 
 
-def swallowed_window(result: dict[str, Any]) -> str | None:
-    """Describe the first timestamped chunk that is long but nearly empty.
+def swallowed_window(segments: list[dict[str, Any]], processor: Any) -> str | None:
+    """Describe the first segment that is long but nearly empty.
 
     A real sentence runs at two to four words per second; a 30 s window
     holding seven words is the signature of the model having replaced the
@@ -305,15 +317,58 @@ def swallowed_window(result: dict[str, Any]) -> str | None:
     look the same — that case only costs a second, prompt-free pass that
     returns the same sentence.
     """
-    for chunk in result.get("chunks") or []:
-        start, end = chunk.get("timestamp") or (None, None)
+    for segment in segments:
+        start, end = segment.get("start"), segment.get("end")
         if start is None or end is None:
             continue
         duration = float(end) - float(start)
-        words = len(str(chunk.get("text", "")).split())
+        text = processor.tokenizer.decode(segment["tokens"], skip_special_tokens=True)
+        words = len(text.split())
         if duration >= SWALLOWED_WINDOW_SECONDS and words < duration * SWALLOWED_WORDS_PER_SECOND:
             return f"{duration:.1f} s pencerede {words} kelime"
     return None
+
+
+def decode(
+    audio: Any, generate_kwargs: dict[str, Any], torch: Any, processor: Any, runtime: dict[str, Any]
+) -> tuple[str, list[dict[str, Any]]]:
+    """One pass of the model over the whole recording: text and its segments."""
+    model = runtime["model"]
+    device = runtime["device"]
+    long_form = audio.size > LONG_FORM_SECONDS * SAMPLE_RATE
+    if long_form:
+        # Longer than one window: hand the whole recording over and let the
+        # sequential algorithm walk it. The attention mask tells it where the
+        # audio really ends.
+        inputs = processor.feature_extractor(
+            audio,
+            sampling_rate=SAMPLE_RATE,
+            return_tensors="pt",
+            truncation=False,
+            padding="longest",
+            return_attention_mask=True,
+        )
+    else:
+        inputs = processor.feature_extractor(
+            audio, sampling_rate=SAMPLE_RATE, return_tensors="pt", return_attention_mask=True
+        )
+    features = inputs.input_features.to(device, runtime["dtype_torch"])
+    attention_mask = inputs.attention_mask.to(device)
+
+    with torch.inference_mode():
+        output = model.generate(
+            features,
+            attention_mask=attention_mask,
+            return_timestamps=True,
+            return_segments=True,
+            **generate_kwargs,
+        )
+    sequences = output["sequences"]
+    segments = output["segments"][0] if output.get("segments") else []
+    # skip_special_tokens drops the timestamp tokens and, through the
+    # tokenizer's prompt stripping, the prompt itself.
+    text = processor.tokenizer.decode(sequences[0], skip_special_tokens=True)
+    return str(text).strip(), segments
 
 
 def transcribe(
@@ -330,6 +385,10 @@ def transcribe(
     prompt = str(request.get("prompt") or "")
     generate_kwargs: dict[str, Any] = {
         "task": "transcribe",
+        # Greedy: beam search was measured as slower and less faithful here,
+        # see the module comment. Spelled out so no library default can
+        # change it underneath us again.
+        "num_beams": 1,
         "temperature": TEMPERATURE_LADDER,
         "compression_ratio_threshold": COMPRESSION_RATIO_THRESHOLD,
     }
@@ -339,22 +398,18 @@ def transcribe(
     if prompt_ids is not None:
         generate_kwargs["prompt_ids"] = prompt_ids
 
-    result = runtime["asr"](
-        audio,
-        generate_kwargs=generate_kwargs,
-        return_timestamps=True,
-    )
+    text, segments = decode(audio, generate_kwargs, torch, processor, runtime)
 
     if prompt_ids is not None and audio.size > LONG_FORM_SECONDS * SAMPLE_RATE:
-        reason = swallowed_window(result)
+        reason = swallowed_window(segments, processor)
         if reason is not None:
             print(f"uzun kayıtta yutulmuş pencere ({reason}); prompt'suz yeniden çözümleniyor", file=sys.stderr, flush=True)
             retry_kwargs = {key: value for key, value in generate_kwargs.items() if key != "prompt_ids"}
-            retry = runtime["asr"](audio, generate_kwargs=retry_kwargs, return_timestamps=True)
-            if swallowed_window(retry) is None:
-                result = retry
+            retry_text, retry_segments = decode(audio, retry_kwargs, torch, processor, runtime)
+            if swallowed_window(retry_segments, processor) is None:
+                text = retry_text
 
-    return str(result.get("text", "")).strip()
+    return text
 
 
 def main() -> int:
@@ -365,7 +420,7 @@ def main() -> int:
         fail_fatally(error)
         return 1
 
-    emit({"event": "ready", **{key: value for key, value in runtime.items() if key != "asr"}})
+    emit({"event": "ready", **{key: value for key, value in runtime.items() if key not in ("model", "dtype_torch")}})
 
     for raw_line in sys.stdin:
         try:
