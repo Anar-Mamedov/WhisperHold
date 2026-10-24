@@ -38,6 +38,21 @@ final class Preferences: ObservableObject {
     @Published var silenceThreshold: Double { didSet { store.set(silenceThreshold, forKey: Key.silence) } }
     @Published var shortcut: ShortcutSpec { didSet { encode(shortcut, forKey: Key.shortcut) } }
     @Published var replacements: [String: String] { didSet { encode(replacements, forKey: Key.replacements) } }
+    /// Uygulamayla gelen yazılım sözlüğü de düzeltme ve yönlendirmede kullanılsın mı?
+    @Published var useBuiltInVocabulary: Bool { didSet { store.set(useBuiltInVocabulary, forKey: Key.builtInVocabulary) } }
+    /// Yerel dil modeliyle yanlış duyulmuş terimleri bağlamdan düzeltme.
+    @Published var smartCorrection: Bool { didSet { store.set(smartCorrection, forKey: Key.smartCorrection) } }
+    /// Yapıştırılan metinde yapılan düzeltmelerden kendiliğinden öğren.
+    @Published var autoLearn: Bool { didSet { store.set(autoLearn, forKey: Key.autoLearn) } }
+    /// Dikteleri yerel hafızaya yaz (terim seçimi ve benzer düzeltmeler için).
+    @Published var rememberDictations: Bool { didSet { store.set(rememberDictations, forKey: Key.remember) } }
+    /// Worker kapalıyken bekleyen hafıza komutları; uygulama kapanıp açılsa da kaybolmasın.
+    var pendingMemoryCommands: [[String: Any]] {
+        get { store.array(forKey: Key.pendingMemory) as? [[String: Any]] ?? [] }
+        set { store.set(newValue, forKey: Key.pendingMemory) }
+    }
+    /// Öğrenilen düzeltmeler, en yeni önde.
+    @Published var learnedCorrections: [LearnedCorrection] { didSet { encode(learnedCorrections, forKey: Key.learned) } }
 
     private let store: UserDefaults
 
@@ -54,6 +69,12 @@ final class Preferences: ObservableObject {
         static let silence = "silenceThreshold"
         static let shortcut = "shortcut"
         static let replacements = "replacements"
+        static let builtInVocabulary = "useBuiltInVocabulary"
+        static let smartCorrection = "smartCorrection"
+        static let autoLearn = "autoLearn"
+        static let learned = "learnedCorrections"
+        static let remember = "rememberDictations"
+        static let pendingMemory = "pendingMemoryCommands"
     }
 
     init(store: UserDefaults = .standard) {
@@ -70,6 +91,56 @@ final class Preferences: ObservableObject {
         silenceThreshold = store.object(forKey: Key.silence) as? Double ?? 0.004
         shortcut = Self.decode(ShortcutSpec.self, forKey: Key.shortcut, from: store) ?? .default
         replacements = Self.decode([String: String].self, forKey: Key.replacements, from: store) ?? [:]
+        useBuiltInVocabulary = store.object(forKey: Key.builtInVocabulary) as? Bool ?? true
+        smartCorrection = store.object(forKey: Key.smartCorrection) as? Bool ?? false
+        autoLearn = store.object(forKey: Key.autoLearn) as? Bool ?? true
+        rememberDictations = store.object(forKey: Key.remember) as? Bool ?? true
+        learnedCorrections = Self.decode([LearnedCorrection].self, forKey: Key.learned, from: store) ?? []
+    }
+
+    /// En fazla bu kadar öğrenilen düzeltme saklanır; eskiler düşer.
+    static let maximumLearned = 500
+
+    /// Öğrenilen düzeltmeleri kaydeder: aynı çift bir daha gelirse tarihi
+    /// tazelenir, aynı yanlışa başka bir doğru gelirse yenisi eskisinin yerini
+    /// alır (kullanıcı fikrini değiştirmiştir).
+    func learn(_ corrections: [LearnedCorrection]) {
+        var list = learnedCorrections
+        for correction in corrections {
+            list.removeAll { LearnedCorrection.key($0.wrong) == LearnedCorrection.key(correction.wrong) }
+            list.insert(correction, at: 0)
+        }
+        learnedCorrections = Array(list.prefix(Self.maximumLearned))
+    }
+
+    func forget(_ correction: LearnedCorrection) {
+        learnedCorrections.removeAll { $0.id == correction.id }
+    }
+
+    /// Öğrenilen doğru yazımlar, en yeni önde; yazılı listedeki terimler hariç.
+    var learnedTerms: [String] {
+        let listed = Set(technicalTerms.map(LearnedCorrection.key))
+        var seen = Set<String>()
+        return learnedCorrections.map(\.right).filter { term in
+            let key = LearnedCorrection.key(term)
+            return !listed.contains(key) && seen.insert(key).inserted
+        }
+    }
+
+    /// Düzeltici, yönlendirme ve dil modeli için kullanıcının tam listesi:
+    /// yazdıkları + öğrenilenler.
+    var allTerms: [String] { technicalTerms + learnedTerms }
+
+    /// Birebir uygulanması güvenli öğrenilen değiştirmeler ("endpoynt" →
+    /// "endpoint"); gerçek kelimeler ("bekleyen") burada yoktur. Elle yazılan
+    /// değiştirmeler her zaman önceliklidir.
+    var effectiveReplacements: [String: String] {
+        var merged: [String: String] = [:]
+        for correction in learnedCorrections.reversed() where correction.isSafeReplacement {
+            merged[correction.wrong] = correction.right
+        }
+        for (wrong, right) in replacements { merged[wrong] = right }
+        return merged
     }
 
     var technicalTerms: [String] {
@@ -79,9 +150,15 @@ final class Preferences: ObservableObject {
             .filter { !$0.isEmpty }
     }
 
-    /// Whisper prompt'u doğal bağlam + kullanıcının kesin yazım listesinden oluşur.
+    /// Prompt'a giren öğrenilen terim sayısı. Whisper'ın prompt bütçesi dar
+    /// (223 token); listenin geri kalanı yönlendirme ve düzeltici üzerinden
+    /// yine etkili olur.
+    static let learnedTermsInPrompt = 25
+
+    /// Whisper prompt'u doğal bağlam + kullanıcının kesin yazım listesi + en
+    /// son öğrenilen terimlerden oluşur.
     var whisperPrompt: String {
-        let terms = technicalTerms
+        let terms = technicalTerms + Array(learnedTerms.prefix(Self.learnedTermsInPrompt))
         guard !terms.isEmpty else { return contextPrompt }
         let suffix = "Özel adlar ve teknik terimler aynen şu yazımla kullanılır: "
             + terms.joined(separator: ", ") + "."

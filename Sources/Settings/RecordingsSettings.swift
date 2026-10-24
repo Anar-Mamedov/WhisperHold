@@ -118,21 +118,54 @@ struct RecordingsSettings: View {
         }
     }
 
+    @State private var draft = ""
+    @State private var draftSource = ""
+    @State private var learnNotice: String?
+
+    /// Son metin düzenlenebilir: yapıştırılan alanı okuyamadığımız uygulamalar
+    /// (bazı tarayıcı ve sohbet editörleri) için düzeltmeyi burada yapıp
+    /// öğretmek, aynı öğrenme döngüsünü besler.
     @ViewBuilder private var resultBox: some View {
         if !controller.lastTranscript.isEmpty {
             GroupBox("Son üretilen metin") {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(controller.lastTranscript)
+                    TextEditor(text: $draft)
                         .font(.callout)
-                        .textSelection(.enabled)
+                        .frame(minHeight: 60)
+                        .border(.separator)
+                        .onAppear(perform: syncDraft)
+                        .onChange(of: controller.lastTranscript) { syncDraft() }
+                    HStack {
+                        Button("Panoya kopyala") { controller.copyLastTranscript() }
+                        Button("Düzeltmeyi öğret") {
+                            if let learned = controller.learn(original: draftSource, corrected: draft) {
+                                learnNotice = "Öğrenildi: " + learned.map { "\($0.wrong) → \($0.right)" }.joined(separator: ", ")
+                            } else {
+                                learnNotice = "Öğrenilecek tek kelimelik bir düzeltme bulunamadı. Bir veya iki kelimeyi değiştirip tekrar dene."
+                            }
+                        }
+                        .disabled(draft == draftSource)
+                    }
+                    .controlSize(.small)
+                    Text("Yanlış kelimeyi burada düzeltip \"Düzeltmeyi öğret\" dersen doğru yazım sözlüğe eklenir; yapıştırdığın uygulamanın metin alanı okunamadığında bu yol kullanılır.")
+                        .font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    Button("Panoya kopyala") { controller.copyLastTranscript() }
-                        .controlSize(.small)
+                    if let learnNotice {
+                        Label(learnNotice, systemImage: "checkmark.circle")
+                            .font(.caption)
+                            .foregroundStyle(.green)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 .padding(4)
             }
         }
+    }
+
+    private func syncDraft() {
+        draft = controller.lastTranscript
+        draftSource = controller.lastTranscript
+        learnNotice = nil
     }
 }
 

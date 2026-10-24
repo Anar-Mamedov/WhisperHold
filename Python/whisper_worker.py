@@ -16,6 +16,11 @@ import traceback
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import term_bias  # noqa: E402  (sits next to this file in the app bundle)
+import term_llm  # noqa: E402
+import memory as memory_store  # noqa: E402
+
 MODEL_ID = "openai/whisper-large-v3"
 MODEL_URL = "https://huggingface.co/openai/whisper-large-v3"
 SAMPLE_RATE = 16_000
@@ -74,6 +79,11 @@ COMPRESSION_RATIO_THRESHOLD = 1.35
 LONG_FORM_SECONDS = 30.0
 SWALLOWED_WINDOW_SECONDS = 12.0
 SWALLOWED_WORDS_PER_SECOND = 0.5
+
+# Contextual biasing toward the user's terms and the bundled software
+# vocabulary, single-window audio only; strength and the reasons are in
+# term_bias.py. The trie is rebuilt only when the term list changes.
+_bias_cache: dict[tuple[str, ...], Any] = {}
 
 
 def emit(message: dict[str, Any]) -> None:
@@ -286,7 +296,8 @@ def load_runtime() -> tuple[Any, Any, Any, str, str, dict[str, Any]]:
         "transformers_version": __import__("transformers").__version__,
         "torch_version": torch.__version__,
     }
-    return np, torch, processor, device, snapshot_path, {"model": model, "dtype_torch": dtype, **verification}
+    runtime = {"model": model, "dtype_torch": dtype, "vocabulary": term_bias.load_vocabulary(), **verification}
+    return np, torch, processor, device, snapshot_path, runtime
 
 
 def make_prompt(processor: Any, prompt: str, torch: Any, device: str) -> Any | None:
@@ -329,13 +340,29 @@ def swallowed_window(segments: list[dict[str, Any]], processor: Any) -> str | No
     return None
 
 
+def bias_processor(torch: Any, processor: Any, terms: list[str]) -> Any | None:
+    key = tuple(terms)
+    if not key:
+        return None
+    if key not in _bias_cache:
+        _bias_cache.clear()
+        _bias_cache[key] = term_bias.make_bias_processor(torch, processor.tokenizer, list(key))
+    return _bias_cache[key]
+
+
 def decode(
-    audio: Any, generate_kwargs: dict[str, Any], torch: Any, processor: Any, runtime: dict[str, Any]
+    audio: Any, generate_kwargs: dict[str, Any], torch: Any, processor: Any, runtime: dict[str, Any],
+    bias_terms: list[str] | None = None,
 ) -> tuple[str, list[dict[str, Any]]]:
     """One pass of the model over the whole recording: text and its segments."""
     model = runtime["model"]
     device = runtime["device"]
     long_form = audio.size > LONG_FORM_SECONDS * SAMPLE_RATE
+    if bias_terms and not long_form:
+        from transformers import LogitsProcessorList
+
+        generate_kwargs = dict(generate_kwargs)
+        generate_kwargs["logits_processor"] = LogitsProcessorList([bias_processor(torch, processor, bias_terms)])
     if long_form:
         # Longer than one window: hand the whole recording over and let the
         # sequential algorithm walk it. The attention mask tells it where the
@@ -371,6 +398,40 @@ def decode(
     return str(text).strip(), segments
 
 
+def build_prompt(request: dict[str, Any], processor: Any, runtime: dict[str, Any]) -> str:
+    """The prompt for this dictation.
+
+    New-style requests carry the context sentence, the hand-written terms and
+    the learned terms separately; memory composes them into the token budget,
+    choosing the learned terms this dictation most likely needs. A request
+    that only carries `prompt` (older app builds, or the no-prompt retry) is
+    used as is.
+    """
+    if "context" not in request and "prompt_terms" not in request:
+        return str(request.get("prompt") or "")
+    context = str(request.get("context") or "")
+    prompt_terms = [str(term) for term in request.get("prompt_terms") or [] if str(term).strip()]
+    learned = [str(term) for term in request.get("learned_terms") or [] if str(term).strip()]
+    store = runtime.get("memory")
+    if store is None:
+        all_terms = prompt_terms + learned
+        if not all_terms:
+            return context
+        return (context + " " if context else "") + "Özel adlar ve teknik terimler aynen şu yazımla kullanılır: " + ", ".join(all_terms) + "."
+
+    def count_tokens(text: str) -> int:
+        return int(len(processor.get_prompt_ids(text))) if text.strip() else 0
+
+    prompt, chosen = store.compose_prompt(context, prompt_terms, learned, count_tokens)
+    if learned:
+        print(
+            f"prompt: {len(prompt_terms)} yazılı + {len(chosen)}/{len(learned)} öğrenilen terim, {count_tokens(prompt)} token",
+            file=sys.stderr,
+            flush=True,
+        )
+    return prompt
+
+
 def transcribe(
     request: dict[str, Any], np: Any, torch: Any, processor: Any, runtime: dict[str, Any]
 ) -> str:
@@ -382,7 +443,7 @@ def transcribe(
         raise ValueError("Ses örneklerinde geçersiz değer var.")
 
     language = str(request.get("language") or "auto")
-    prompt = str(request.get("prompt") or "")
+    prompt = build_prompt(request, processor, runtime)
     generate_kwargs: dict[str, Any] = {
         "task": "transcribe",
         # Greedy: beam search was measured as slower and less faithful here,
@@ -398,14 +459,21 @@ def transcribe(
     if prompt_ids is not None:
         generate_kwargs["prompt_ids"] = prompt_ids
 
-    text, segments = decode(audio, generate_kwargs, torch, processor, runtime)
+    # Biasing vocabulary: the user's own terms first, then the bundled list
+    # when the app asks for it.
+    bias_terms = [str(term) for term in (request.get("bias_terms") or request.get("terms") or []) if str(term).strip()]
+    if request.get("builtin_vocabulary"):
+        seen = set(bias_terms)
+        bias_terms += [term for term in runtime["vocabulary"] if term not in seen]
+
+    text, segments = decode(audio, generate_kwargs, torch, processor, runtime, bias_terms)
 
     if prompt_ids is not None and audio.size > LONG_FORM_SECONDS * SAMPLE_RATE:
         reason = swallowed_window(segments, processor)
         if reason is not None:
             print(f"uzun kayıtta yutulmuş pencere ({reason}); prompt'suz yeniden çözümleniyor", file=sys.stderr, flush=True)
             retry_kwargs = {key: value for key, value in generate_kwargs.items() if key != "prompt_ids"}
-            retry_text, retry_segments = decode(audio, retry_kwargs, torch, processor, runtime)
+            retry_text, retry_segments = decode(audio, retry_kwargs, torch, processor, runtime, bias_terms)
             if swallowed_window(retry_segments, processor) is None:
                 text = retry_text
 
@@ -420,7 +488,20 @@ def main() -> int:
         fail_fatally(error)
         return 1
 
-    emit({"event": "ready", **{key: value for key, value in runtime.items() if key not in ("model", "dtype_torch")}})
+    emit({
+        "event": "ready",
+        "vocabulary_terms": len(runtime["vocabulary"]),
+        **{key: value for key, value in runtime.items() if key not in ("model", "dtype_torch", "vocabulary")},
+    })
+
+    smart = term_llm.SmartCorrector(emit)
+    support_root = Path(os.environ.get("HF_HOME") or (Path.home() / "Library/Application Support/WhisperHold/HuggingFace")).parent
+    try:
+        store: memory_store.Memory | None = memory_store.Memory(support_root / "memory.sqlite", emit)
+    except Exception as error:  # noqa: BLE001 - memory is an aid, never a blocker
+        print(f"hafıza açılamadı: {error}", file=sys.stderr, flush=True)
+        store = None
+    runtime["memory"] = store
 
     for raw_line in sys.stdin:
         try:
@@ -431,6 +512,49 @@ def main() -> int:
                 emit({"event": "transcribing", "id": request_id})
                 text = transcribe(request, np, torch, processor, runtime)
                 emit({"event": "result", "id": request_id, "text": text})
+            elif command == "load_llm":
+                # Akıllı düzeltme açıkken uygulama bunu worker her başladığında
+                # gönderir; model arka planda yüklenir, diktenin önünü kesmez.
+                smart.start()
+                emit({"event": "llm_state", "id": request_id, "state": smart.state, "detail": smart.detail})
+            elif command == "suggest":
+                terms = [str(term) for term in request.get("terms") or [] if str(term).strip()]
+                vocabulary = terms + [term for term in runtime["vocabulary"] if term not in set(terms)]
+                text = str(request.get("text") or "")
+                examples = [example for example in request.get("examples") or [] if isinstance(example, dict)]
+                if store is not None:
+                    seen = {(str(e.get("wrong")), str(e.get("right"))) for e in examples}
+                    for example in store.nearest_corrections(text):
+                        if (example["wrong"], example["right"]) not in seen:
+                            examples.append(example)
+                replacements, state = smart.suggest(text, vocabulary, examples)
+                emit({"event": "suggestions", "id": request_id, "replacements": replacements, "state": state})
+            elif command == "load_memory":
+                if store is not None:
+                    store.start_embedder()
+                else:
+                    emit({"event": "memory_state", "embedder": "failed", "detail": "Hafıza açılamadı"})
+            elif command == "remember":
+                if store is not None:
+                    kind = request.get("kind")
+                    if kind == "dictation":
+                        store.remember_dictation(str(request.get("text") or ""), str(request.get("app") or ""),
+                                                 [str(t) for t in request.get("terms") or []])
+                    elif kind == "correction":
+                        store.remember_correction(str(request.get("wrong") or ""), str(request.get("right") or ""),
+                                                  str(request.get("context") or ""), bool(request.get("safe")))
+                    emit({"event": "memory_state", **store.stats()})
+            elif command == "forget":
+                if store is not None:
+                    store.forget_correction(str(request.get("wrong") or ""), str(request.get("right") or ""))
+                    emit({"event": "memory_state", **store.stats()})
+            elif command == "memory_clear":
+                if store is not None:
+                    store.clear()
+                    emit({"event": "memory_state", **store.stats()})
+            elif command == "memory_stats":
+                if store is not None:
+                    emit({"event": "memory_state", **store.stats()})
             elif command == "ping":
                 emit({"event": "pong", "id": request_id})
             elif command == "shutdown":

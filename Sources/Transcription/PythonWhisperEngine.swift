@@ -74,6 +74,11 @@ final class PythonWhisperEngine {
     }
 
     var onStateChange: ((LoadState) -> Void)?
+    /// Akıllı düzeltme modelinin durumu: "downloading", "loading", "ready",
+    /// "failed" ve kullanıcıya gösterilecek açıklama.
+    var onSmartCorrectionState: ((String, String) -> Void)?
+    /// Hafıza durumu: dikte/düzeltme sayıları ve embedding modelinin hâli.
+    var onMemoryState: (([String: Any]) -> Void)?
     private(set) var state: LoadState = .idle {
         didSet { onStateChange?(state) }
     }
@@ -183,7 +188,23 @@ final class PythonWhisperEngine {
         state = .idle
     }
 
-    func transcribe(samples: [Float], language: String, prompt: String) async throws -> String {
+    /// Bir diktenin sözlük bilgisi. Prompt'u worker kurar: bağlam cümlesi ve
+    /// yazılı terimler her zaman girer, öğrenilen terimlerden hafızanın
+    /// seçtikleri bütçe doldukça eklenir (bkz. `memory.py`). Yönlendirme ise
+    /// listenin tamamını ve istenirse yerleşik sözlüğü kullanır.
+    struct Vocabulary {
+        var context = ""
+        var terms: [String] = []
+        var learned: [String] = []
+        var useBuiltIn = true
+        /// Yönlendirme listesi prompt listesinden ayrı verilebilir (prompt'suz
+        /// yeniden denemede prompt boş, yönlendirme yine tam liste).
+        var biasTerms: [String]?
+    }
+
+    func transcribe(
+        samples: [Float], language: String, vocabulary: Vocabulary = Vocabulary()
+    ) async throws -> String {
         guard isReady else { throw EngineError.notReady }
 
         let requestID = UUID().uuidString
@@ -212,12 +233,107 @@ final class PythonWhisperEngine {
                     "command": "transcribe",
                     "audio_path": audioURL.path,
                     "language": language,
-                    "prompt": prompt,
+                    "context": vocabulary.context,
+                    "prompt_terms": vocabulary.terms,
+                    "learned_terms": vocabulary.learned,
+                    "bias_terms": vocabulary.biasTerms ?? (vocabulary.terms + vocabulary.learned),
+                    "builtin_vocabulary": vocabulary.useBuiltIn,
                 ])
             } catch {
                 takePending(requestID)
                 continuation.resume(throwing: error)
             }
+        }
+    }
+
+    /// Hafızaya yazılacak komutlar worker kapalıyken (boşta boşaltıldığında)
+    /// burada bekler ve bir sonraki `ready` ile gönderilir.
+    private(set) var pendingMemoryCommands: [[String: Any]] = []
+
+    /// Hafıza komutu: worker hazırsa hemen, değilse kuyruğa.
+    func sendToMemory(_ command: [String: Any]) {
+        if isReady, (try? send(command)) != nil { return }
+        pendingMemoryCommands.append(command)
+    }
+
+    func restorePendingMemoryCommands(_ commands: [[String: Any]]) {
+        pendingMemoryCommands = commands + pendingMemoryCommands
+    }
+
+    func flushPendingMemoryCommands() {
+        guard isReady, !pendingMemoryCommands.isEmpty else { return }
+        let queued = pendingMemoryCommands
+        pendingMemoryCommands = []
+        for command in queued { sendToMemory(command) }
+        if !queued.isEmpty { AppLog.write("hafıza: kuyruktaki \(queued.count) komut gönderildi") }
+    }
+
+    func loadMemory() {
+        guard isReady else { return }
+        try? send(["id": UUID().uuidString, "command": "load_memory"])
+    }
+
+    /// Akıllı düzeltme modelini worker'da arka planda yükletir. Model worker
+    /// ile birlikte yaşar; worker her başladığında (ve ayar açıldığında)
+    /// yeniden istenir. Yükleme diktenin önünü kesmez.
+    func loadSmartCorrection() {
+        guard isReady else {
+            AppLog.write("akıllı düzeltme: worker hazır değil, yükleme isteği gönderilmedi")
+            return
+        }
+        do {
+            try send(["id": UUID().uuidString, "command": "load_llm"])
+            AppLog.write("akıllı düzeltme: yükleme istendi")
+        } catch {
+            AppLog.write("akıllı düzeltme: yükleme isteği gönderilemedi — \(error.localizedDescription)")
+        }
+    }
+
+    /// Yerel dil modelinden yanlış duyulmuş terim önerileri ister.
+    ///
+    /// Model hazır değilse worker boş liste döndürür; dikte beklemez. Yanıt
+    /// birkaç saniye içinde gelmezse istek düşürülür, metin olduğu gibi kalır.
+    /// Kullanıcının daha önce düzelttiği bir cümle: dil modeline "bu bağlamda
+    /// bu kelimeyi böyle düzelt" örneği olarak gider.
+    struct Example {
+        var text: String
+        var wrong: String
+        var right: String
+    }
+
+    func suggestCorrections(
+        for text: String, terms: [String], examples: [Example] = []
+    ) async throws -> [(wrong: String, right: String)] {
+        guard isReady, !text.isEmpty else { return [] }
+        let requestID = UUID().uuidString
+        let raw: String = try await withCheckedThrowingContinuation { continuation in
+            pending[requestID] = continuation
+            watchdogs[requestID] = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(45))
+                guard !Task.isCancelled, let self, let waiting = self.takePending(requestID) else { return }
+                // Öneri gelmedi diye worker'ı kapatmaya gerek yok; dikte metni
+                // olduğu gibi kullanılır.
+                waiting.resume(returning: "[]")
+            }
+            do {
+                try send([
+                    "id": requestID,
+                    "command": "suggest",
+                    "text": text,
+                    "terms": terms,
+                    "examples": examples.map { ["text": $0.text, "wrong": $0.wrong, "right": $0.right] },
+                ])
+            } catch {
+                takePending(requestID)
+                continuation.resume(throwing: error)
+            }
+        }
+        guard let data = raw.data(using: .utf8),
+              let pairs = try? JSONSerialization.jsonObject(with: data) as? [[String: String]]
+        else { return [] }
+        return pairs.compactMap { pair in
+            guard let wrong = pair["wrong"], let right = pair["right"], !wrong.isEmpty, !right.isEmpty else { return nil }
+            return (wrong, right)
         }
     }
 
@@ -366,7 +482,9 @@ final class PythonWhisperEngine {
     /// satırına yazar. Bunu okuyup kullanıcıya sahte bir `%0` yerine gerçek
     /// yüzdeyi gösteriyoruz; protokol stdout'ta temiz kalmaya devam ediyor.
     private func consumeErrorOutput(_ text: String) {
-        NSLog("WhisperHold Python: \(text)")
+        for line in text.split(separator: "\n") where !line.contains("it/s]") && !line.trimmingCharacters(in: .whitespaces).isEmpty {
+            AppLog.write("python: \(line)")
+        }
         guard let regex = try? NSRegularExpression(pattern: #"model\.safetensors:\s+(\d+)%"#) else {
             return
         }
@@ -379,6 +497,9 @@ final class PythonWhisperEngine {
 
     private func handle(_ message: [String: Any]) {
         guard let event = message["event"] as? String else { return }
+        if event != "result" && event != "suggestions" {
+            AppLog.write("worker event: \(event) \(message["state"] as? String ?? "") \(message["detail"] as? String ?? "")")
+        }
         switch event {
         case "state":
             let detail = message["detail"] as? String ?? ""
@@ -405,6 +526,24 @@ final class PythonWhisperEngine {
                   let continuation = takePending(id)
             else { return }
             continuation.resume(returning: message["text"] as? String ?? "")
+
+        case "suggestions":
+            // Öneri listesi JSON metni olarak sürdürülür; `suggestCorrections`
+            // çözer. Böylece bekleyen istek tablosu tek tipte kalıyor.
+            guard let id = message["id"] as? String,
+                  let continuation = takePending(id)
+            else { return }
+            let pairs = message["replacements"] as? [[String: Any]] ?? []
+            let data = (try? JSONSerialization.data(withJSONObject: pairs)) ?? Data("[]".utf8)
+            continuation.resume(returning: String(decoding: data, as: UTF8.self))
+
+        case "llm_state":
+            if let state = message["state"] as? String {
+                onSmartCorrectionState?(state, message["detail"] as? String ?? "")
+            }
+
+        case "memory_state":
+            onMemoryState?(message)
 
         case "error":
             let id = message["id"] as? String ?? ""

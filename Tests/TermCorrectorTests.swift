@@ -27,7 +27,7 @@ final class TermCorrectorTests: XCTestCase {
         "otomatikleştirsin", "şekilde", "çektim", "açtım", "lazım", "toplandı",
         "gittim", "büyük", "oldu", "sürüyor", "hepsi", "çağırdım", "gözden", "geçir",
         "eğittik", "modemi", "değiştir", "ettik", "yaptık", "dokümanı", "arkadaşım",
-        "verdi", "baktı",
+        "verdi", "baktı", "ile", "geldi",
     ]
 
     private func corrector(dictionary: Bool = true) -> TermCorrector {
@@ -69,14 +69,25 @@ final class TermCorrectorTests: XCTestCase {
     func testPhoneticMisspellingsAreCorrected() {
         assertCorrects("Projeyi bild ettim, komit attım, endpoynt bozuk.", to: "Projeyi build ettim, commit attım, endpoint bozuk.")
         assertCorrects("Gitti ve gelmedi, gitab açıldı.", to: "Gitti ve gelmedi, GitHub açıldı.")
-        assertCorrects("Diploy ettik, mörc yaptık.", to: "Deploy ettik, mörc yaptık.")
+        assertCorrects("Bunu diploy ettik, mörc yaptık.", to: "Bunu deploy ettik, mörc yaptık.")
         assertCorrects("Ekskod açılmıyor.", to: "Ekskod açılmıyor.")
     }
 
-    func testSentenceInitialCapitalIsKept() {
-        assertCorrects("Pablish ettik.", to: "Publish ettik.")
-        assertCorrects("Debag modunda.", to: "Debug modunda.")
-        assertCorrects("Bild'i yeniden çalıştır.", to: "Build'i yeniden çalıştır.")
+    func testCapitalisedUnknownWordsAreTreatedAsNames() {
+        // "Merve" → "merge" ve "Ferhat" → "format" bir harf uzakta; sözlükte
+        // olmayan büyük harfli kelime özel ad sayılır ve dokunulmaz. Bedeli:
+        // cümle başındaki yanlış yazım da düzeltilmez.
+        assertCorrects("Merve ile Ferhat geldi.", to: "Merve ile Ferhat geldi.")
+        assertCorrects("Pablish ettik.", to: "Pablish ettik.")
+        assertCorrects("Bild'i yeniden çalıştır.", to: "Bild'i yeniden çalıştır.")
+        // Küçük harfle ve sözlük dışı: yaklaşık düzeltme çalışır, büyük harf
+        // terimden gelir.
+        assertCorrects("Bunu pablish ettik, debag modunda.", to: "Bunu publish ettik, debug modunda.")
+    }
+
+    func testWithoutDictionaryCapitalisedMisspellingsAreStillCorrected() {
+        let bare = corrector(dictionary: false)
+        XCTAssertEqual(bare.correct("Pablish ettik."), "Publish ettik.")
     }
 
     func testExactMatchAppliesUserCasing() {

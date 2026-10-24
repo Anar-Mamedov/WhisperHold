@@ -71,6 +71,8 @@ targets:
       - path: Sources/Transcription/TermCorrector.swift
       - path: Sources/Transcription/TextPostProcessor.swift
       - path: Sources/Transcription/SpellingGuard.swift
+      - path: Sources/Transcription/BuiltInVocabulary.swift
+      - path: Sources/Learning/CorrectionLearner.swift
 
     configFiles:
       Debug: Config/Signing.xcconfig

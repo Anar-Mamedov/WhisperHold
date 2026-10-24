@@ -36,6 +36,13 @@ struct TermCorrector {
     /// Doğru yazımlar: "build", "commit", "endpoint"…
     var terms: [String] = []
 
+    /// Uygulamayla gelen yazılım sözlüğü (`BuiltInVocabulary`). Kullanıcının
+    /// listesinden sonra gelir ve daha ihtiyatlı kullanılır: yalnızca sözlükte
+    /// olmayan yanlış yazımları düzeltir. Kullanıcı "button" yazmadıysa gerçek
+    /// Türkçe "buton" kelimesini İngilizceye çevirmek bize düşmez — o dönüşüm
+    /// yalnızca kullanıcının kendi listelediği terimler için yapılır.
+    var builtInTerms: [String] = []
+
     /// Kelime uzunluğuna oranla izin verilen en fazla düzenleme mesafesi.
     ///
     /// 0,34 ölçümle seçildi: bu değerde "bild→build", "komit→commit",
@@ -98,23 +105,25 @@ struct TermCorrector {
     private struct Entry {
         let term: String
         let normalized: String
-        /// Terimin Türkçe okunuşuyla yazımı; terimin kendisiyle aynıysa `nil`.
+        /// Terimin Türkçe okunuşuyla yazımı; terimin kendisiyle aynıysa veya
+        /// bu dönüşüm bu terim için kapalıysa (yerleşik sözlük) `nil`.
         let respelled: String?
     }
 
     func correct(_ text: String) -> String {
-        let entries = terms
-            .map { $0.trimmingCharacters(in: .whitespaces) }
+        var seen = Set<String>()
+        let entries = (terms.map { ($0, true) } + builtInTerms.map { ($0, false) })
+            .map { ($0.0.trimmingCharacters(in: .whitespaces), $0.1) }
             // API, UI gibi kısa terimler yaklaşık eşleştirilmez ama birebir
             // eşleştiğinde kullanıcının büyük/küçük harf biçimi uygulanır.
-            .filter { !$0.isEmpty }
-            .map { term -> Entry in
+            .filter { !$0.0.isEmpty && seen.insert(Self.normalizedForMatching($0.0)).inserted }
+            .map { term, allowsRespelling -> Entry in
                 let normalized = Self.normalizedForMatching(term)
                 let respelled = Self.turkishRespelling(of: term)
                 return Entry(
                     term: term,
                     normalized: normalized,
-                    respelled: respelled == normalized ? nil : respelled
+                    respelled: (allowsRespelling && respelled != normalized) ? respelled : nil
                 )
             }
         guard !entries.isEmpty else { return text }
@@ -146,7 +155,7 @@ struct TermCorrector {
             let stem = String(token[token.startIndex..<apostrophe])
             let suffix = String(token[apostrophe...])
             guard let match = directMatch(stem, entries: entries)
-                ?? (isKnown(stem) ? nil : fuzzyMatch(stem, entries: entries))
+                ?? (isProtected(stem) ? nil : fuzzyMatch(stem, entries: entries))
             else { return token }
             return Self.matchingCase(of: stem, term: match) + suffix
         }
@@ -168,13 +177,16 @@ struct TermCorrector {
             return split
         }
 
-        // 3. Yaklaşık eşleşme — gerçek bir kelimeye asla.
+        // 3. Yaklaşık eşleşme — gerçek bir kelimeye asla, özel ad olabilecek
+        //    kelimeye de kelimenin tamamı için değil: "Merve" → "merge" olmaz.
         guard !known else { return token }
-        if let match = fuzzyMatch(token, entries: entries) {
+        if !isProperNoun(token), let match = fuzzyMatch(token, entries: entries) {
             return Self.matchingCase(of: token, term: match)
         }
 
-        // 4. Yaklaşık kök + uzun ek: "komponantleri" → "component'leri".
+        // 4. Yaklaşık kök + uzun ek: "komponantleri" → "component'leri". Uzun
+        //    bir Türkçe ek taşıyan büyük harfli kelime ad olmaktan çok cümle
+        //    başındaki bir terimdir, o yüzden burada ad koruması yok.
         let lowered = Self.normalizedForMatching(token)
         for stemLength in stride(from: token.count - 3, through: Self.minimumTermLength, by: -1) {
             let stemEnd = token.index(token.startIndex, offsetBy: stemLength)
@@ -189,6 +201,21 @@ struct TermCorrector {
 
     private func isKnown(_ word: String) -> Bool {
         isKnownWord?(word) ?? false
+    }
+
+    /// Yaklaşık düzeltmeden muaf: sözlükteki kelimeler ve özel adlar.
+    private func isProtected(_ word: String) -> Bool {
+        isKnown(word) || isProperNoun(word)
+    }
+
+    /// Büyük harfle başlayan ama sözlükte olmayan kelime bir ad sayılır:
+    /// "Merve" ile "merge", "Ferhat" ile "format" bir harf uzakta ve isimler
+    /// sözlükte yok. Bedeli, cümle başında büyük harfle yazılmış bir yanlış
+    /// yazımın ("Bild ettim") düzeltilmemesi; bir adı bozmak çok daha kötü.
+    /// Sözlük yoksa ayrım yapılamaz, eski davranış kalır.
+    private func isProperNoun(_ word: String) -> Bool {
+        guard isKnownWord != nil, let first = word.first, first.isUppercase else { return false }
+        return !isKnown(word)
     }
 
     /// Birebir eşleşme (büyük/küçük harf farkıyla) veya terimin Türkçe yazımı.

@@ -54,6 +54,10 @@ final class AppController: ObservableObject {
 
     /// Ayarlar penceresi açıldığında görünecek sekme.
     @Published var settingsTab = SettingsTab.general
+    /// Akıllı düzeltme modelinin durumu (indiriliyor, hazır, hata). Yoksa `nil`.
+    @Published private(set) var smartCorrectionStatus: String?
+    /// Hafıza durumu: "12 dikte · 3 düzeltme · embedding hazır".
+    @Published private(set) var memoryStatus: String?
 
     private let permissions: Permissions
     private let preferences: Preferences
@@ -62,6 +66,7 @@ final class AppController: ObservableObject {
     private let injector = TextInjector()
     private let monitor = HotkeyMonitor()
     private let indicator = RecordingIndicator()
+    private let pasteWatcher = PasteWatcher()
     private var isMonitoring = false
     private var modelTask: Task<Void, Never>?
     private var idleUnloadTask: Task<Void, Never>?
@@ -81,8 +86,35 @@ final class AppController: ObservableObject {
         monitor.onEngage = { [weak self] in self?.beginRecording() }
         monitor.onDisengage = { [weak self] in self?.finishRecording() }
         monitor.onCancel = { [weak self] in self?.abandonRecording() }
+        monitor.onReturnKey = { [weak self] in self?.pasteWatcher.noteReturnPressed() }
+        pasteWatcher.onCorrections = { [weak self] corrections in self?.learn(corrections) }
         recorder.onLevel = { [weak self] level in self?.indicator.push(level: level) }
         engine.onStateChange = { [weak self] state in self?.handleEngineState(state) }
+        engine.onMemoryState = { [weak self] message in
+            guard let self else { return }
+            let dictations = message["dictations"] as? Int ?? 0
+            let corrections = message["corrections"] as? Int ?? 0
+            let embedder = message["embedder"] as? String ?? "off"
+            let embedderText: String
+            switch embedder {
+            case "ready": embedderText = "embedding hazır"
+            case "loading": embedderText = "embedding yükleniyor"
+            case "failed": embedderText = message["detail"] as? String ?? "embedding yüklenemedi"
+            default: embedderText = "embedding kapalı"
+            }
+            self.memoryStatus = "\(dictations) dikte · \(corrections) düzeltme · \(embedderText)"
+        }
+        engine.restorePendingMemoryCommands(preferences.pendingMemoryCommands)
+        engine.onSmartCorrectionState = { [weak self] state, detail in
+            guard let self else { return }
+            AppLog.write("akıllı düzeltme durumu: \(state) \(detail)")
+            switch state {
+            case "ready": self.smartCorrectionStatus = "Akıllı düzeltme hazır · \(detail)"
+            case "downloading", "loading": self.smartCorrectionStatus = detail
+            case "failed": self.smartCorrectionStatus = detail
+            default: self.smartCorrectionStatus = nil
+            }
+        }
 
         Task { await bootstrap() }
     }
@@ -95,6 +127,7 @@ final class AppController: ObservableObject {
     }
 
     private func bootstrap() async {
+        AppLog.write("başlatıldı · akıllı düzeltme \(preferences.smartCorrection ? "açık" : "kapalı") · öğrenme \(preferences.autoLearn ? "açık" : "kapalı") · yerleşik sözlük \(preferences.useBuiltInVocabulary ? "açık" : "kapalı")")
         while !permissions.allGranted {
             status = .needsPermissions
             try? await Task.sleep(for: .seconds(1))
@@ -122,6 +155,12 @@ final class AppController: ObservableObject {
         recorder.preRollDuration = preferences.preRollSeconds
         recorder.keepWarmInterval = preferences.keepWarmSeconds
         recorder.setInputDevice(uid: preferences.inputDeviceUID.isEmpty ? nil : preferences.inputDeviceUID)
+        if preferences.smartCorrection {
+            engine.loadSmartCorrection()
+        } else {
+            smartCorrectionStatus = nil
+        }
+        if preferences.rememberDictations { engine.loadMemory() }
     }
 
     func retryModelLoad() {
@@ -165,6 +204,10 @@ final class AppController: ObservableObject {
             if !isDictationActive { status = .preparing(detail) }
         case .ready:
             modelActivity = nil
+            if preferences.smartCorrection { engine.loadSmartCorrection() }
+            if preferences.rememberDictations { engine.loadMemory() }
+            engine.flushPendingMemoryCommands()
+            preferences.pendingMemoryCommands = engine.pendingMemoryCommands
             if !isDictationActive {
                 status = .idle
                 scheduleIdleModelUnload()
@@ -313,10 +356,12 @@ final class AppController: ObservableObject {
 
             if let archived { RecordingArchive.annotate(archived, transcript: text) }
             lastTranscript = text
+            remember(dictation: text)
             switch await injector.deliver(text) {
             case .pasted:
                 lastNotice = nil
                 play(.success)
+                if preferences.autoLearn { pasteWatcher.watch(pasted: text) }
             case .clipboardOnly(let reason):
                 lastNotice = reason
                 play(.discard)
@@ -341,21 +386,54 @@ final class AppController: ObservableObject {
     /// Döndürülen ham metin, ikinci deneme de başarısızsa arşive yazılacak
     /// olan — kullanıcı neyin çıktığını görebilsin diye.
     private func transcribeWithFallback(_ samples: [Float]) async throws -> (raw: String, text: String?) {
-        let raw = try await engine.transcribe(
-            samples: samples,
-            language: preferences.language,
-            prompt: preferences.whisperPrompt
+        let vocabulary = PythonWhisperEngine.Vocabulary(
+            context: preferences.contextPrompt,
+            terms: preferences.technicalTerms,
+            learned: preferences.learnedTerms,
+            useBuiltIn: preferences.useBuiltInVocabulary
         )
-        if let text = polish(raw) { return (raw, text) }
+        let raw = try await engine.transcribe(samples: samples, language: preferences.language, vocabulary: vocabulary)
+        if let text = await polish(raw, smart: true) { return (raw, text) }
         guard !preferences.whisperPrompt.isEmpty else { return (raw, nil) }
 
-        NSLog("WhisperHold: ilk sonuç atıldı, prompt'suz yeniden deneniyor — \(raw)")
-        let retry = try await engine.transcribe(
-            samples: samples,
-            language: preferences.language,
-            prompt: ""
-        )
-        return (retry, polish(retry))
+        AppLog.write("ilk sonuç atıldı, prompt'suz yeniden deneniyor")
+        // Prompt'suz: bağlam ve terimler boş, yönlendirme yine açık.
+        var bare = vocabulary
+        bare.biasTerms = vocabulary.terms + vocabulary.learned
+        bare.context = ""
+        bare.terms = []
+        bare.learned = []
+        let retry = try await engine.transcribe(samples: samples, language: preferences.language, vocabulary: bare)
+        return (retry, await polish(retry, smart: true))
+    }
+
+    /// Ham metni önce (açıksa) yerel dil modelinin terim önerilerinden,
+    /// sonra sözlük düzelticisinden geçirir. Öneriler worker'da sözlükle
+    /// doğrulanmış gelir; burada yalnızca kelime sınırında birebir uygulanır.
+    private func polish(_ raw: String, smart: Bool) async -> String? {
+        var text = raw
+        if smart, preferences.smartCorrection {
+            // Örnekler hafızadan gelir (bu metne en benzeyen düzeltmeler);
+            // hafıza henüz boşsa en son öğrenilenler.
+            let examples = preferences.learnedCorrections.prefix(4).map {
+                PythonWhisperEngine.Example(text: $0.context, wrong: $0.wrong, right: $0.right)
+            }
+            let suggestions = (try? await engine.suggestCorrections(
+                for: raw, terms: preferences.allTerms, examples: Array(examples)
+            )) ?? []
+            for (wrong, right) in suggestions {
+                let pattern = "(?<!\\w)" + NSRegularExpression.escapedPattern(for: wrong) + "(?!\\w)"
+                text = text.replacingOccurrences(
+                    of: pattern,
+                    with: NSRegularExpression.escapedTemplate(for: right),
+                    options: [.regularExpression, .caseInsensitive]
+                )
+            }
+            if !suggestions.isEmpty {
+                AppLog.write("akıllı düzeltme uygulandı — \(suggestions.map { "\($0.wrong)→\($0.right)" }.joined(separator: ", "))")
+            }
+        }
+        return polish(text)
     }
 
     /// Model boşta kaldığı için kapalıysa, kayıtla birlikte başlatılan yüklemeyi
@@ -365,12 +443,83 @@ final class AppController: ObservableObject {
         if !engine.isReady { try await engine.prepare() }
     }
 
+    /// Kullanıcının yapıştırılan metinde yaptığı düzeltmeleri sözlüğe alır.
+    ///
+    /// Doğru yazım her durumda terim olarak öğrenilir (prompt, yönlendirme,
+    /// düzeltici ve dil modeli artık onu bilir). Yanlış yazım hedef dilde
+    /// gerçek bir kelime değilse ("endpoynt") birebir değiştirme de olur;
+    /// gerçek bir kelimeyse ("bekleyen") olmaz — kullanıcı bir dahaki sefere
+    /// gerçekten onu demiş olabilir, karar bağlama bakan katmanlara kalır.
+    private func learn(_ detected: [LearnedCorrection]) {
+        guard !detected.isEmpty else { return }
+        let isWord = SpellingGuard.knownWordCheck(dictationLanguage: preferences.language)
+        let corrections = detected.map { correction -> LearnedCorrection in
+            var learned = correction
+            let realWord = isWord.map { check in
+                correction.wrong.split(separator: " ").allSatisfy { check(String($0)) }
+            } ?? true
+            learned.isSafeReplacement = !realWord
+            return learned
+        }
+        preferences.learn(corrections)
+        for correction in corrections {
+            engine.sendToMemory([
+                "id": UUID().uuidString, "command": "remember", "kind": "correction",
+                "wrong": correction.wrong, "right": correction.right,
+                "context": correction.context, "safe": correction.isSafeReplacement,
+            ])
+        }
+        preferences.pendingMemoryCommands = engine.pendingMemoryCommands
+        let summary = corrections.map { "\($0.wrong) → \($0.right)" }.joined(separator: ", ")
+        lastNotice = "Sözlüğe öğrenildi: \(summary)"
+        AppLog.write("öğrenildi — \(summary)")
+    }
+
+    /// Kullanıcı son metni uygulamanın kendi penceresinde düzeltti: yapıştırılan
+    /// alanı okuyamadığımız uygulamalar için öğrenme yolu. Düzeltilen çiftleri
+    /// döndürür; hiçbiri yoksa `nil`.
+    @discardableResult
+    func learn(original: String, corrected: String) -> [LearnedCorrection]? {
+        let detected = CorrectionLearner.detect(pasted: original, current: corrected)
+        guard !detected.isEmpty else { return nil }
+        learn(detected)
+        if lastTranscript == original { lastTranscript = corrected }
+        return detected
+    }
+
+    /// Dikteyi hafızaya yazar: terim seçimi için bağlam, kullanım sayımı için
+    /// metin. Worker kapalıysa kuyrukta bekler.
+    private func remember(dictation text: String) {
+        guard preferences.rememberDictations, !text.isEmpty else { return }
+        engine.sendToMemory([
+            "id": UUID().uuidString, "command": "remember", "kind": "dictation", "text": text,
+            "app": NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "",
+            "terms": preferences.allTerms,
+        ])
+        preferences.pendingMemoryCommands = engine.pendingMemoryCommands
+    }
+
+    /// Öğrenilen bir düzeltmeyi hem listeden hem hafızadan siler.
+    func forget(_ correction: LearnedCorrection) {
+        preferences.forget(correction)
+        engine.sendToMemory(["id": UUID().uuidString, "command": "forget", "wrong": correction.wrong, "right": correction.right])
+        preferences.pendingMemoryCommands = engine.pendingMemoryCommands
+    }
+
+    /// Dikte geçmişini ve düzeltme hafızasını siler; öğrenilen terim listesi kalır.
+    func clearMemory() {
+        engine.sendToMemory(["id": UUID().uuidString, "command": "memory_clear"])
+        preferences.pendingMemoryCommands = engine.pendingMemoryCommands
+        memoryStatus = "Hafıza temizleniyor…"
+    }
+
     /// Ham model çıktısını kullanıcının sözlüğünden geçirir.
     /// `nil` dönerse metin güvenilmez; çağıran kullanıcıyı uyarır.
     private func polish(_ raw: String) -> String? {
         var processor = TextPostProcessor()
-        processor.terms = preferences.technicalTerms
-        processor.replacements = preferences.replacements
+        processor.terms = preferences.allTerms
+        processor.builtInTerms = preferences.useBuiltInVocabulary ? BuiltInVocabulary.terms : []
+        processor.replacements = preferences.effectiveReplacements
         processor.isKnownWord = SpellingGuard.knownWordCheck(dictationLanguage: preferences.language)
         return processor.process(raw)
     }

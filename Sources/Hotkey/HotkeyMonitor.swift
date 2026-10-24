@@ -24,6 +24,8 @@ final class HotkeyMonitor {
     var onDisengage: (() -> Void)?
     /// Kayıt sırasında sistem kısayolu tetiklendi — kaydı çöpe at.
     var onCancel: (() -> Void)?
+    /// Enter/Return basıldı — yapıştırılan metin alanının izlenmesi için.
+    var onReturnKey: (() -> Void)?
 
     private(set) var shortcut: ShortcutSpec
     private var tap: CFMachPort?
@@ -111,6 +113,7 @@ final class HotkeyMonitor {
         case .keyDown:
             let code = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
             pressedKeyCodes.insert(code)
+            if code == KeyCodes.returnKey || code == KeyCodes.keypadEnter { onReturnKey?() }
 
             // Modifier-only kısayol basılıyken normal bir tuşa basıldıysa kullanıcı
             // dikte etmiyor, sistem kısayolu kullanıyor (örn. ⌃⌘Q ekranı kilitler).

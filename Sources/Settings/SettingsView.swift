@@ -195,6 +195,7 @@ private struct ModelSettings: View {
 
 private struct VocabularySettings: View {
     @EnvironmentObject private var preferences: Preferences
+    @EnvironmentObject private var controller: AppController
     @State private var wrongTerm = ""
     @State private var rightTerm = ""
 
@@ -220,6 +221,72 @@ private struct VocabularySettings: View {
                     preferences.vocabulary = Preferences.sampleTechnicalTerms
                 }
                 .controlSize(.small)
+
+                Divider().padding(.vertical, 4)
+                sectionTitle("Yerleşik yazılım sözlüğü", detail: "Uygulamayla gelen \(BuiltInVocabulary.terms.count) yaygın yazılım terimi (backend, pull request, Kubernetes…) kendi listenin arkasına eklenir: model dinlerken bu yazımlara doğru yönlendirilir ve yakın yanlış yazımlar düzeltilir. Kendi listendeki yazım her zaman önceliklidir.")
+                Toggle("Yerleşik sözlüğü kullan", isOn: $preferences.useBuiltInVocabulary)
+
+                Divider().padding(.vertical, 4)
+                sectionTitle("Akıllı düzeltme", detail: "Yerel bir dil modeli (Qwen3 4B, ilk açılışta ~8 GB indirilir) metni bağlamıyla okuyup yanlış duyulmuş terimleri önerir; yalnızca sözlüklerde bulunan terimlere giden öneriler uygulanır, başka hiçbir kelime değişmez. Dikte başına birkaç saniye ekler.")
+                Toggle("Akıllı düzeltmeyi kullan", isOn: $preferences.smartCorrection)
+                    .onChange(of: preferences.smartCorrection) { controller.applyPreferences() }
+                if let status = controller.smartCorrectionStatus {
+                    Label(status, systemImage: "brain")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Divider().padding(.vertical, 4)
+                sectionTitle("Öğrenilenler", detail: "Yapıştırılan metinde bir kelimeyi düzeltip Enter'a bastığında (ya da birkaç saniye bekleyince) düzelttiğin yazım sözlüğe kendiliğinden eklenir ve prompt, yönlendirme, düzeltici ve akıllı düzeltme onu öğrenir. Yanlış taraf gerçek bir Türkçe kelimeyse birebir değiştirilmez; sen gerçekten onu demiş olabilirsin.")
+                Toggle("Düzeltmelerimden kendiliğinden öğren", isOn: $preferences.autoLearn)
+                if preferences.learnedCorrections.isEmpty {
+                    Text("Henüz öğrenilen bir düzeltme yok.")
+                        .font(.caption).foregroundStyle(.tertiary)
+                } else {
+                    VStack(spacing: 0) {
+                        ForEach(preferences.learnedCorrections) { correction in
+                            HStack {
+                                Text(correction.wrong).foregroundStyle(.secondary)
+                                Image(systemName: "arrow.right").font(.caption2).foregroundStyle(.tertiary)
+                                Text(correction.right)
+                                if correction.isSafeReplacement {
+                                    Text("birebir")
+                                        .font(.caption2)
+                                        .padding(.horizontal, 5).padding(.vertical, 2)
+                                        .background(RoundedRectangle(cornerRadius: 4).fill(.secondary.opacity(0.15)))
+                                        .help("Yanlış taraf gerçek bir kelime değil; her geçtiğinde birebir değiştirilir.")
+                                }
+                                Spacer()
+                                Text(correction.learnedAt.formatted(date: .abbreviated, time: .omitted))
+                                    .font(.caption2).foregroundStyle(.tertiary)
+                                Button {
+                                    controller.forget(correction)
+                                } label: {
+                                    Image(systemName: "minus.circle")
+                                }
+                                .buttonStyle(.borderless)
+                                .help("Unut")
+                            }
+                            .padding(.vertical, 5)
+                            Divider()
+                        }
+                    }
+                }
+
+                Divider().padding(.vertical, 4)
+                sectionTitle("Hafıza", detail: "Dikteler ve düzeltmeler yerel bir SQLite dosyasında tutulur ve küçük bir yerel embedding modeliyle (multilingual-e5-small, ~470 MB, bir kez indirilir) anlamsal olarak aranır. Prompt bütçesi dolduğunda öğrenilen terimlerden o an gerekli olanlar seçilir; akıllı düzeltmeye bu metne en benzeyen geçmiş düzeltmeler örnek verilir. Hiçbir şey makineden çıkmaz.")
+                Toggle("Dikteleri hafızada tut", isOn: $preferences.rememberDictations)
+                    .onChange(of: preferences.rememberDictations) { controller.applyPreferences() }
+                HStack {
+                    if let status = controller.memoryStatus {
+                        Label(status, systemImage: "memorychip")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Hafızayı temizle") { controller.clearMemory() }
+                        .controlSize(.small)
+                }
 
                 Divider().padding(.vertical, 4)
                 sectionTitle("Kesin düzeltmeler", detail: "Modelin sürekli aynı biçimde yanlış yazdığı kelime veya ifadeleri birebir değiştirir.")

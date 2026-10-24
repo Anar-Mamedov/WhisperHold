@@ -92,6 +92,9 @@ enum KeyCodes {
     static let leftControl: UInt16 = 59
     static let rightControl: UInt16 = 62
     static let function: UInt16 = 63
+    /// Enter tuşları; yapıştırılan metnin düzeltilip gönderildiğini anlamak için.
+    static let returnKey: UInt16 = 36
+    static let keypadEnter: UInt16 = 76
 
     private static let names: [UInt16: String] = [
         leftCommand: "Sol ⌘", rightCommand: "Sağ ⌘",

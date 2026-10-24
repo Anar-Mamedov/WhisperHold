@@ -29,7 +29,38 @@ is needed.
   `component'leri`, `commitledim` → `commit'ledim`), and exact replacements
   fix words the model keeps getting wrong. The fuzzy pass asks macOS's own
   spelling dictionary first, so real words of the dictation language
-  (`model`, `depo`, `transfer`) are never rewritten into look-alike terms.
+  (`model`, `depo`, `transfer`) and names are never rewritten into
+  look-alike terms.
+- **Built-in software vocabulary.** Some 500 common terms (backend, pull
+  request, Kubernetes…) ship with the app. While the model decodes a clip it
+  is nudged toward these spellings and toward your own list (contextual
+  biasing), which is what turns a misheard `bekleyen` back into `backendci`;
+  afterwards the same list drives the fuzzy correction. Your list always
+  wins over the built-in one.
+- **Learns from your corrections.** After a dictation is pasted, the app
+  watches that text field through the Accessibility API. Fix a word and
+  press Enter (or just pause) and the corrected spelling is added to your
+  vocabulary on its own, like Wispr Flow's auto-learned dictionary — so the
+  prompt, the biasing, the corrector and smart correction all know it next
+  time. If the word the app wrote was itself a real Turkish word, it is not
+  turned into a blind replacement: you may really mean it next time.
+- **Local memory with semantic search.** Dictations and corrections are
+  kept in a SQLite database next to the models, indexed with SQLite's
+  full-text search and with sentence embeddings from a small local model
+  (multilingual-e5-small, MIT, downloaded once). Whisper's prompt only holds
+  about 223 tokens, so once the learned vocabulary outgrows it the memory
+  chooses which learned terms go in for *this* dictation: the ones you use
+  most, most recently, and in contexts closest to what you were just
+  dictating. Smart correction gets your past corrections whose sentences are
+  most similar to the new transcript as worked examples. Nothing leaves the
+  machine; the Vocabulary tab shows the counts and can wipe it.
+- **Smart correction (optional).** A local language model (Qwen3-4B-Instruct,
+  Apache-2.0, downloaded once) reads the finished sentence and proposes
+  replacements for software terms the recognizer turned into similar-sounding
+  Turkish words. Only proposals that occur verbatim, sound alike and resolve
+  to a vocabulary term (with a Turkish suffix at most) are applied, so the
+  model cannot rewrite anything else. Off by default; it adds about a second
+  per dictation.
 - **Hallucination and loop guards.** Known subtitle artifacts ("Thanks for
   watching", "Altyazı M.K.") are dropped instead of pasted — as a whole clip
   or as a stray sentence inside a longer dictation — runaway repetition is
@@ -51,8 +82,9 @@ is needed.
   Intel macOS builds.
 - Xcode 15 or later
 - Python 3 — 3.11 is preferred: `brew install python@3.11`
-- About 4 GB of free disk space: ~0.9 GB for the Python environment and
-  ~2.9 GB for the model
+- About 4.5 GB of free disk space: ~0.9 GB for the Python environment,
+  ~2.9 GB for Whisper and ~0.5 GB for the memory's embedding model; another
+  8 GB if you turn on smart correction
 - [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`),
   only if you change `project.yml`
 
@@ -91,7 +123,7 @@ fallback heuristic) have unit tests too; they run with the app's own
 environment:
 
 ```sh
-cd Python && ~/Library/Application\ Support/WhisperHold/runtime/.venv/bin/python3 -m unittest test_whisper_worker
+cd Python && ~/Library/Application\ Support/WhisperHold/runtime/.venv/bin/python3 -m unittest test_whisper_worker test_term_bias test_term_llm test_memory
 ```
 
 ### Code signing
@@ -150,7 +182,7 @@ Labels in the app are in Turkish; the English names are given alongside.
 | Genel (General) | Shortcut, dictation language, input device, sound cues, recording indicator, launch at login |
 | Model | Model status and verification details, restart the model, open the model folder |
 | Kayıtlar (Recordings) | The recording archive: play, re-transcribe, see the latest text |
-| Sözlük (Vocabulary) | Context sentence, technical terms, exact replacements |
+| Sözlük (Vocabulary) | Context sentence, technical terms, built-in software vocabulary, smart correction, learned corrections, exact replacements |
 | Gelişmiş (Advanced) | Pre-roll, how long the microphone stays warm, minimum duration, silence threshold, archive folder |
 
 ### Vocabulary
@@ -174,6 +206,54 @@ Labels in the app are in Turkish; the English names are given alongside.
   exception is a term's own Turkish respelling (`komponent`, `statik`): if you
   listed `component`, you get `component`. Azerbaijani uses the Turkish
   dictionary; automatic language detection checks all available ones.
+- **Built-in vocabulary** (`Python/software_terms.txt`) — on by default. It
+  is used for contextual biasing while decoding and for fuzzy correction
+  afterwards, but more cautiously than your own list: a built-in term never
+  turns a real Turkish word into its English spelling (`buton` stays `buton`
+  unless *you* list `button`).
+- **Smart correction** — off by default. Turning it on downloads
+  Qwen3-4B-Instruct-2507 (~8 GB) into the app's model cache and loads it next
+  to Whisper. After each dictation the model is asked, with strict
+  instructions and examples, for a JSON list of misheard-term replacements;
+  the app applies only those that pass three checks (verbatim source,
+  similar sound, vocabulary-derived target). Measured on 36 transcripts it
+  proposed exactly one change, the right one (`bekleyen` → `backendci`),
+  and nothing on twelve genuine Turkish sentences full of look-alike words.
+  The first dictation after the worker restarts may run before the model
+  has loaded; it is then skipped for that dictation.
+- **Learned corrections** — on by default. The app keeps watching the field
+  it pasted into for up to two minutes, reading its text through the
+  Accessibility permission it already has for pasting. When one or two words
+  of the pasted text have been replaced and you press Enter, switch fields or
+  stop editing for a few seconds, the pair is learned: the corrected spelling
+  joins your vocabulary (prompt, biasing, correction and smart correction),
+  and the sentence it was corrected in is shown to the smart-correction model
+  as an example. If the word the app had written exists in the dictionary of
+  the dictation language (`bekleyen`), the pair is *not* applied as a blind
+  replacement — saying that word on purpose must still work; the layers that
+  read context decide case by case. A misspelling that is not a word
+  (`endpoynt`) does become an exact replacement. Chromium and Electron apps
+  (Chrome, the Claude desktop app, Slack, VS Code) only build their
+  accessibility tree when asked, so the app switches it on for the frontmost
+  app before reading. Fields it still cannot read (terminals, password
+  fields) are skipped and noted in the app log; for those, correct the text
+  in the Recordings tab ("Son üretilen metin" is editable) and press
+  **Düzeltmeyi öğret** — the same learning applies. The list is in the
+  Vocabulary tab; any entry can be forgotten there.
+- **Memory** (`memory.sqlite` in the app's support folder) — on by default.
+  Every dictation and every learned correction is stored, with an embedding
+  when the embedding model is loaded (it loads next to Whisper in a few
+  seconds; rows stored before that are embedded afterwards). The worker
+  composes each prompt from the context sentence, all hand-written terms and
+  the best-ranked learned terms until the token budget is full; the ranking
+  adds usage count, recency and the similarity between the last few
+  dictations and the sentences a term was seen in. For smart correction the
+  eight past corrections most similar to the transcript are shown to the
+  model as examples — a correction you made once ("Cloudy" → "Claude") is
+  applied in the next similar sentence. If the app cannot reach the worker
+  (it is unloaded after 90 s idle), memory writes wait in a queue and are
+  sent when it starts again. "Dikteleri hafızada tut" turns storage off;
+  "Hafızayı temizle" deletes it.
 - **Replacements** — exact `wrong → right` pairs for words the model
   consistently gets wrong.
 
@@ -209,7 +289,8 @@ re-transcribing can help. Healthy audio produces the same text every time.
 - Audio is recorded and transcribed on your Mac. Nothing is sent to OpenAI or
   any other server, and no account or API key is involved.
 - Network access is used only during setup: `pip` installs the pinned Python
-  packages and the model is downloaded from Hugging Face.
+  packages and the models are downloaded from Hugging Face (Whisper, the
+  embedding model, and the smart-correction model if you turn it on).
 - Recordings are written to disk only if you enable the archive folder, and
   only the five most recent are kept.
 
@@ -258,6 +339,15 @@ fp16 and was slower. The prompt, on the other hand, earns its place: on ten
 synthesized sentences with software terms it took term spelling from 11/20 to
 20/20 and halved the word error rate.
 
+Contextual biasing adds a fixed bonus to the score of every token that starts
+or continues a vocabulary term, so the model prefers `backend` over the
+look-alike `bek…` at the moment it decides. The strength (2.0) is the smallest
+that fixed a real recording; it also lowered the word error rate on
+synthesized term sentences from 9.1 % to 6.5 % and changed one of twelve
+genuine Turkish sentences (the rare `rende` became `render`). On recordings
+longer than one 30 s window the same bias was destructive at every strength
+tried, so it is applied to single-window audio only.
+
 Two safety nets cover the prompt's one measured failure. If the model answers
 a clip with nothing but a subtitle artifact, the app decodes the clip once
 more without the prompt before giving up. And on recordings longer than one
@@ -280,9 +370,14 @@ Sources/
   Permissions/    microphone / input monitoring / accessibility checks
   Settings/       preferences and settings window
   Transcription/  Python worker client, text post-processing, spelling guard
+  Learning/       watches the pasted field and learns your corrections
 Tests/            unit tests for the text pipeline
 Python/
   whisper_worker.py   model loading and transcription
+  term_bias.py        contextual biasing toward the vocabulary
+  term_llm.py         optional smart correction with a local language model
+  memory.py           SQLite memory, full-text search, embeddings, prompt selection
+  software_terms.txt  built-in software vocabulary
   install_runtime.sh  creates the virtual environment
   requirements.txt    pinned Python dependencies
 Config/           code signing settings
@@ -311,6 +406,8 @@ Delete the app, then remove its data:
 rm -rf ~/Library/Application\ Support/WhisperHold
 rm -rf ~/Documents/WhisperHold
 ```
+
+The first folder also holds the memory database and the app log.
 
 ## Contributing
 

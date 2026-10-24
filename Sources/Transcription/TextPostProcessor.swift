@@ -15,6 +15,9 @@ struct TextPostProcessor {
     /// Whisper her seferinde farklı yazdığı için birebir tablo yetmiyor.
     var terms: [String] = []
 
+    /// Uygulamayla gelen yazılım sözlüğü; bkz. `TermCorrector.builtInTerms`.
+    var builtInTerms: [String] = []
+
     /// Hedef dilin sözlüğü: gerçek kelimeler yaklaşık düzeltmeden muaf.
     /// Bkz. `SpellingGuard`.
     var isKnownWord: ((String) -> Bool)?
@@ -80,9 +83,10 @@ struct TextPostProcessor {
 
         // Önce yaklaşık eşleşme (kayan hedefi yakalar), sonra birebir tablo
         // (kullanıcının kesin kararı, her zaman son sözü söyler).
-        if !terms.isEmpty {
+        if !terms.isEmpty || !builtInTerms.isEmpty {
             var corrector = TermCorrector()
             corrector.terms = terms
+            corrector.builtInTerms = builtInTerms
             corrector.isKnownWord = isKnownWord
             text = corrector.correct(text)
         }

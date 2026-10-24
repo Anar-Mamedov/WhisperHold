@@ -65,7 +65,8 @@ struct MenuBarView: View {
                             Button("Yeniden çevir") { controller.retranscribeLatest() }
                                 .disabled(!controller.canRetranscribe || controller.recordings.isEmpty)
                             Spacer()
-                            Button("Kayıtlar…") { openRecordings() }
+                            Button("Düzelt…") { openRecordings() }
+                                .help("Metni Kayıtlar sekmesinde düzeltip sözlüğe öğret")
                         }
                         .controlSize(.small)
                     }
