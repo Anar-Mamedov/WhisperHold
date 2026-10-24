@@ -392,7 +392,7 @@ final class AppController: ObservableObject {
             learned: preferences.learnedTerms,
             useBuiltIn: preferences.useBuiltInVocabulary
         )
-        let raw = try await engine.transcribe(samples: samples, language: preferences.language, vocabulary: vocabulary)
+        let raw = try await transcribeRecovering(samples, vocabulary: vocabulary)
         if let text = await polish(raw, smart: true) { return (raw, text) }
         guard !preferences.contextSentences.isEmpty || !preferences.allTerms.isEmpty else { return (raw, nil) }
 
@@ -403,8 +403,27 @@ final class AppController: ObservableObject {
         bare.contexts = []
         bare.terms = []
         bare.learned = []
-        let retry = try await engine.transcribe(samples: samples, language: preferences.language, vocabulary: bare)
+        let retry = try await transcribeRecovering(samples, vocabulary: bare)
         return (retry, await polish(retry, smart: true))
+    }
+
+    /// Worker süreci çevirinin ortasında ölürse dikte kaybolmasın: worker bir
+    /// kez yeniden kurulur ve bellekteki aynı ses tekrar çevrilir. Kullanıcı
+    /// hiçbir şeyi yeniden söylemez, yalnızca birkaç saniye daha bekler.
+    ///
+    /// Bilinen tek ölüm nedeni (Metal'in GPU'yu iki iş parçacığından kullanan
+    /// süreci durdurması) `Python/gpu_lock.py` ile giderildi; bu yol, worker
+    /// ileride başka bir nedenle çökerse diktenin yine de teslim edilmesi için.
+    private func transcribeRecovering(
+        _ samples: [Float], vocabulary: PythonWhisperEngine.Vocabulary
+    ) async throws -> String {
+        do {
+            return try await engine.transcribe(samples: samples, language: preferences.language, vocabulary: vocabulary)
+        } catch PythonWhisperEngine.EngineError.workerExited(let status) {
+            AppLog.write("worker çeviri sırasında kapandı (çıkış kodu \(status)); yeniden başlatılıp aynı ses bir kez daha çevriliyor")
+            try await engine.restart()
+            return try await engine.transcribe(samples: samples, language: preferences.language, vocabulary: vocabulary)
+        }
     }
 
     /// Ham metni önce (açıksa) yerel dil modelinin terim önerilerinden,

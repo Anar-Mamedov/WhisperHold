@@ -318,7 +318,9 @@ def make_prompt(processor: Any, prompt: str, torch: Any, device: str) -> Any | N
     # if they had been spoken and pasted in front of every transcript.
     if prompt_ids.shape[-1] > 223:
         prompt_ids = torch.cat([prompt_ids[..., :1], prompt_ids[..., -222:]], dim=-1)
-    return prompt_ids.to(torch.device(device))
+    # Even this small copy encodes Metal work; see gpu_lock.py.
+    with gpu_lock.LOCK:
+        return prompt_ids.to(torch.device(device))
 
 
 def swallowed_window(segments: list[dict[str, Any]], processor: Any) -> str | None:
@@ -468,8 +470,7 @@ def transcribe(
     }
     if language != "auto":
         generate_kwargs["language"] = language
-    with gpu_lock.LOCK:
-        prompt_ids = make_prompt(processor, prompt, torch, runtime["device"])
+    prompt_ids = make_prompt(processor, prompt, torch, runtime["device"])
     if prompt_ids is not None:
         generate_kwargs["prompt_ids"] = prompt_ids
 

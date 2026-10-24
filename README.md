@@ -417,7 +417,10 @@ project.yml       XcodeGen project definition
   worker restart, which tripped a Metal assertion
   (`_status < MTLCommandBufferStatusCommitted`). All GPU work now goes
   through one lock (`Python/gpu_lock.py`); a model finishing its load waits
-  for the dictation to finish instead.
+  for the dictation to finish instead. `Python/test_gpu_lock.py` fails the
+  moment a GPU call is added outside that lock, and should the worker ever
+  die mid-dictation for another reason, the app restarts it and transcribes
+  the same audio again instead of losing the dictation.
 - **Starting over.** Quit the app and delete
   `~/Library/Application Support/WhisperHold`. The Python environment and
   the model are recreated on next launch.
