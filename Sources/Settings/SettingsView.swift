@@ -213,7 +213,7 @@ private struct VocabularySettings: View {
                 .controlSize(.small)
 
                 Divider().padding(.vertical, 4)
-                sectionTitle("Teknik terimler", detail: "Prompt'a eklenir; ayrıca modelin yakın yazdığı biçimler çıktıdan sonra güvenli yaklaşık eşleşmeyle düzeltilir.")
+                sectionTitle("Teknik terimler", detail: "Prompt'a eklenir; ayrıca modelin yakın yazdığı biçimler (bild → build, komponentleri → component'leri) çıktıdan sonra düzeltilir. Seçili dilin yazım sözlüğünde bulunan gerçek kelimelere dokunulmaz.")
                 TextField("build, component, API, publish…", text: $preferences.vocabulary)
                     .font(.system(.body, design: .monospaced))
                 Button("Yazılım terimlerini doldur") {

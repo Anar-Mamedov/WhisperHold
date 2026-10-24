@@ -51,6 +51,29 @@ COMPRESSION_RATIO_THRESHOLD = 1.35
 # the same 18.5 s recording takes 2.9 s without them and 21.7 s with them, for
 # identical text. In transformers 4.46.3 no_speech_threshold without
 # logprob_threshold also raises UnboundLocalError.
+#
+# Deliberately NOT set either: num_beams. Beam search (5 beams, Whisper's own
+# CLI default) was measured against greedy on the five archived recordings
+# under white and pink noise down to 0 dB SNR, at -24/-36 dB gain and on a
+# 23 s concatenation: greedy 8.1 % word errors, beam 10.3 %, and beam took
+# 2.2x longer. Beam's extra errors were rewrites of what was said ("abi" →
+# "ağabey", "sağolasın" → "sağ olasın"). fp32 was also tried: identical text
+# to fp16, 40 % slower.
+
+# The prompt (context sentence + term list) stays on every window, because it
+# is what makes technical terms come out spelled right: on ten synthesized
+# sentences it took term spelling from 11/20 to 20/20 and halved the word
+# error rate. Its one measured failure mode is on audio longer than a single
+# 30 s window: transformers prepends the prompt to every window, and on one
+# 46 s recording the second window came back as a single subtitle artifact
+# ("Bu videoyu izlediğiniz için teşekkür ederim.") spanning the whole window
+# while 19 s of real speech vanished. Decoding the same audio without the
+# prompt was word-perfect. So a long-form result is checked for a window that
+# is long but nearly empty, and only then the audio is decoded again without
+# the prompt. Healthy audio never pays for the second pass.
+LONG_FORM_SECONDS = 30.0
+SWALLOWED_WINDOW_SECONDS = 12.0
+SWALLOWED_WORDS_PER_SECOND = 0.5
 
 
 def emit(message: dict[str, Any]) -> None:
@@ -273,6 +296,26 @@ def make_prompt(processor: Any, prompt: str, torch: Any, device: str) -> Any | N
     return prompt_ids.to(torch.device(device))
 
 
+def swallowed_window(result: dict[str, Any]) -> str | None:
+    """Describe the first timestamped chunk that is long but nearly empty.
+
+    A real sentence runs at two to four words per second; a 30 s window
+    holding seven words is the signature of the model having replaced the
+    window with an artifact. A long pause followed by one short sentence can
+    look the same — that case only costs a second, prompt-free pass that
+    returns the same sentence.
+    """
+    for chunk in result.get("chunks") or []:
+        start, end = chunk.get("timestamp") or (None, None)
+        if start is None or end is None:
+            continue
+        duration = float(end) - float(start)
+        words = len(str(chunk.get("text", "")).split())
+        if duration >= SWALLOWED_WINDOW_SECONDS and words < duration * SWALLOWED_WORDS_PER_SECOND:
+            return f"{duration:.1f} s pencerede {words} kelime"
+    return None
+
+
 def transcribe(
     request: dict[str, Any], np: Any, torch: Any, processor: Any, runtime: dict[str, Any]
 ) -> str:
@@ -301,6 +344,16 @@ def transcribe(
         generate_kwargs=generate_kwargs,
         return_timestamps=True,
     )
+
+    if prompt_ids is not None and audio.size > LONG_FORM_SECONDS * SAMPLE_RATE:
+        reason = swallowed_window(result)
+        if reason is not None:
+            print(f"uzun kayıtta yutulmuş pencere ({reason}); prompt'suz yeniden çözümleniyor", file=sys.stderr, flush=True)
+            retry_kwargs = {key: value for key, value in generate_kwargs.items() if key != "prompt_ids"}
+            retry = runtime["asr"](audio, generate_kwargs=retry_kwargs, return_timestamps=True)
+            if swallowed_window(retry) is None:
+                result = retry
+
     return str(result.get("text", "")).strip()
 
 

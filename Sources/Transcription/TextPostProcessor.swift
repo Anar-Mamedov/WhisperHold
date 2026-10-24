@@ -15,6 +15,10 @@ struct TextPostProcessor {
     /// Whisper her seferinde farklı yazdığı için birebir tablo yetmiyor.
     var terms: [String] = []
 
+    /// Hedef dilin sözlüğü: gerçek kelimeler yaklaşık düzeltmeden muaf.
+    /// Bkz. `SpellingGuard`.
+    var isKnownWord: ((String) -> Bool)?
+
     /// Tamamı bu ifadelerden biriyse çıktı tamamen atılır.
     /// Kısmi eşleşmeye bakmıyoruz — "teşekkürler" gerçek bir dikte olabilir.
     private static let hallucinations: Set<String> = {
@@ -30,6 +34,12 @@ struct TextPostProcessor {
             "İzlediğiniz için teşekkür ederim",
             "Altyazı ve çeviri",
             "Kanalıma abone olmayı unutmayın",
+            // 46 saniyelik birleştirilmiş kayıtta ikinci pencere bunlarla doldu.
+            "Bu videoyu izlediğiniz için teşekkür ederim",
+            "Bu videoyu izlediğiniz için teşekkürler",
+            "Bu videoları izlediğimiz için teşekkürler",
+            "İzlediğiniz için teşekkürler, görüşmek üzere",
+            "Görüşmek üzere",
             // İngilizce karşılıkları
             "Thank you for watching",
             "Thanks for watching",
@@ -65,11 +75,15 @@ struct TextPostProcessor {
         guard !Self.hallucinations.contains(normalized) else { return nil }
         guard !Self.isDegenerateRepetition(normalized) else { return nil }
 
+        text = Self.droppingHallucinatedSentences(text)
+        guard !text.isEmpty else { return nil }
+
         // Önce yaklaşık eşleşme (kayan hedefi yakalar), sonra birebir tablo
         // (kullanıcının kesin kararı, her zaman son sözü söyler).
         if !terms.isEmpty {
             var corrector = TermCorrector()
             corrector.terms = terms
+            corrector.isKnownWord = isKnownWord
             text = corrector.correct(text)
         }
 
@@ -80,6 +94,23 @@ struct TextPostProcessor {
             of: "\\s+", with: " ", options: .regularExpression
         )
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Uzun bir diktenin içindeki halüsinasyon cümlelerini atar.
+    ///
+    /// Tam metin eşleşmesi yalnızca kısa klipleri yakalıyor. Otuz saniyeyi
+    /// aşan bir kayıtta model bir pencereyi "Bu videoyu izlediğiniz için
+    /// teşekkür ederim." diye doldurabiliyor (46 saniyelik birleştirilmiş
+    /// kayıtta ölçüldü); o cümle gerçek diktenin sonuna yapışıyordu. Cümle
+    /// cümle bakıp yalnızca birebir bilinen artefaktları çıkarıyoruz —
+    /// kullanıcının gerçekten söylediği "teşekkürler" bir artefakt değil.
+    static func droppingHallucinatedSentences(_ text: String) -> String {
+        let sentences = splitIntoSentences(text)
+        guard sentences.count > 1 else { return text }
+        let kept = sentences.filter { !hallucinations.contains(normalize($0)) }
+        guard kept.count < sentences.count else { return text }
+        NSLog("WhisperHold: halüsinasyon cümlesi atıldı — \(sentences.count - kept.count) cümle")
+        return kept.joined().trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Metnin sonundaki tekrar döngüsünü kırpar.
@@ -220,12 +251,18 @@ struct TextPostProcessor {
     }
 
     /// Cümlelere böler, noktalama işaretini cümlede bırakır.
+    ///
+    /// Yalnızca ardından boşluk gelen (veya metni bitiren) noktalama cümle
+    /// sonudur: "M.K." kısaltması ve "3.5 saniye" gibi sayılar bölünmez.
     private static func splitIntoSentences(_ text: String) -> [String] {
         var sentences: [String] = []
         var current = ""
-        for character in text {
+        let characters = Array(text)
+        for (index, character) in characters.enumerated() {
             current.append(character)
-            if character == "." || character == "!" || character == "?" {
+            guard character == "." || character == "!" || character == "?" else { continue }
+            let next = index + 1 < characters.count ? characters[index + 1] : nil
+            if next == nil || next!.isWhitespace || next == "." || next == "!" || next == "?" {
                 sentences.append(current)
                 current = ""
             }

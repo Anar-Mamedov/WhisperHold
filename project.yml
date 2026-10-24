@@ -52,3 +52,34 @@ targets:
         COMBINE_HIDPI_IMAGES: YES
         ENABLE_USER_SCRIPT_SANDBOXING: NO
 
+    scheme:
+      testTargets:
+        - WhisperHoldTests
+
+  # Logic tests for the text pipeline. The bundle compiles the pure Swift
+  # sources it needs directly instead of hosting the app, so running the tests
+  # never launches the menu bar app or asks for permissions:
+  #
+  #   xcodebuild test -project WhisperHold.xcodeproj -scheme WhisperHold \
+  #     -destination 'platform=macOS'
+  WhisperHoldTests:
+    type: bundle.unit-test
+    platform: macOS
+
+    sources:
+      - path: Tests
+      - path: Sources/Transcription/TermCorrector.swift
+      - path: Sources/Transcription/TextPostProcessor.swift
+      - path: Sources/Transcription/SpellingGuard.swift
+
+    configFiles:
+      Debug: Config/Signing.xcconfig
+      Release: Config/Signing.xcconfig
+
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.anar.whisperhold.tests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "5.0"
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+

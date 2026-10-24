@@ -299,13 +299,9 @@ final class AppController: ObservableObject {
         do {
             try await ensureModelReady()
 
-            let raw = try await engine.transcribe(
-                samples: samples,
-                language: preferences.language,
-                prompt: preferences.whisperPrompt
-            )
+            let (raw, text) = try await transcribeWithFallback(samples)
 
-            guard let text = polish(raw) else {
+            guard let text else {
                 // Atılan metni de arşive yazıyoruz: kullanıcı listede neyin
                 // çıktığını görmeden hangi kaydı yeniden çevireceğini bilemez.
                 if let archived { RecordingArchive.annotate(archived, transcript: raw) }
@@ -333,6 +329,35 @@ final class AppController: ObservableObject {
         }
     }
 
+    /// Sesi çevirir; sonuç halüsinasyon, boş veya tekrar döngüsüyse aynı sesi
+    /// bir kez de prompt'suz dener.
+    ///
+    /// Prompt teknik terimlerin yazımını belirgin biçimde düzeltiyor (ölçüldü:
+    /// terim doğruluğu 11/20'den 20/20'ye), ama Whisper'ın prompt'la bir
+    /// pencereyi altyazı artefaktıyla doldurduğu da ölçüldü. Prompt'suz
+    /// çözümleme bu çöküşü yaşamadığı için yalnızca ilk sonuç atıldığında ve
+    /// yalnızca bir kez denenir: sağlıklı dikte ikinci geçişi hiç görmez.
+    ///
+    /// Döndürülen ham metin, ikinci deneme de başarısızsa arşive yazılacak
+    /// olan — kullanıcı neyin çıktığını görebilsin diye.
+    private func transcribeWithFallback(_ samples: [Float]) async throws -> (raw: String, text: String?) {
+        let raw = try await engine.transcribe(
+            samples: samples,
+            language: preferences.language,
+            prompt: preferences.whisperPrompt
+        )
+        if let text = polish(raw) { return (raw, text) }
+        guard !preferences.whisperPrompt.isEmpty else { return (raw, nil) }
+
+        NSLog("WhisperHold: ilk sonuç atıldı, prompt'suz yeniden deneniyor — \(raw)")
+        let retry = try await engine.transcribe(
+            samples: samples,
+            language: preferences.language,
+            prompt: ""
+        )
+        return (retry, polish(retry))
+    }
+
     /// Model boşta kaldığı için kapalıysa, kayıtla birlikte başlatılan yüklemeyi
     /// bekler. Olağan dışı biçimde görev yoksa burada hazırlar.
     private func ensureModelReady() async throws {
@@ -346,6 +371,7 @@ final class AppController: ObservableObject {
         var processor = TextPostProcessor()
         processor.terms = preferences.technicalTerms
         processor.replacements = preferences.replacements
+        processor.isKnownWord = SpellingGuard.knownWordCheck(dictationLanguage: preferences.language)
         return processor.process(raw)
     }
 
@@ -400,12 +426,7 @@ final class AppController: ObservableObject {
                 let samples = try RecordingArchive.samples(at: recording.url)
                 try await self.ensureModelReady()
 
-                let raw = try await self.engine.transcribe(
-                    samples: samples,
-                    language: self.preferences.language,
-                    prompt: self.preferences.whisperPrompt
-                )
-                let polished = self.polish(raw)
+                let (raw, polished) = try await self.transcribeWithFallback(samples)
                 RecordingArchive.annotate(recording.url, transcript: polished ?? raw)
 
                 guard let text = polished else {

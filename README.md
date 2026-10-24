@@ -25,11 +25,15 @@ is needed.
   SHA-256 against Hugging Face's content address on first load.
 - **Vocabulary that sticks.** A context sentence and a list of technical terms
   are fed to Whisper as a prompt, terms are fuzzy-corrected after
-  transcription (including Turkish suffixes like `API'leri`), and exact
-  replacements fix words the model keeps getting wrong.
+  transcription (including glued Turkish suffixes: `komponentleri` →
+  `component'leri`, `commitledim` → `commit'ledim`), and exact replacements
+  fix words the model keeps getting wrong. The fuzzy pass asks macOS's own
+  spelling dictionary first, so real words of the dictation language
+  (`model`, `depo`, `transfer`) are never rewritten into look-alike terms.
 - **Hallucination and loop guards.** Known subtitle artifacts ("Thanks for
-  watching", "Altyazı M.K.") are dropped instead of pasted, runaway repetition
-  is re-decoded at a higher temperature and collapsed, and a watchdog stops a
+  watching", "Altyazı M.K.") are dropped instead of pasted — as a whole clip
+  or as a stray sentence inside a longer dictation — runaway repetition is
+  re-decoded at a higher temperature and collapsed, and a watchdog stops a
   stuck request from freezing the app.
 - **Recording archive and re-transcription.** Optionally keep the last five
   dictations as WAV files, listen to them, and re-run any of them after
@@ -70,6 +74,17 @@ open build/Build/Products/Release/WhisperHold.app
 
 `project.yml` is the source of truth for the Xcode project. After editing it,
 run `xcodegen generate`.
+
+### Tests
+
+The text pipeline (term correction, spelling guard, hallucination and
+repetition filters) has unit tests. They compile the pure Swift sources
+directly, so running them never launches the app or asks for permissions:
+
+```sh
+xcodebuild test -project WhisperHold.xcodeproj -scheme WhisperHold \
+  -destination 'platform=macOS'
+```
 
 ### Code signing
 
@@ -136,7 +151,16 @@ Labels in the app are in Turkish; the English names are given alongside.
   Whisper uses it as a hint for style and topic.
 - **Technical terms** — comma-separated spellings you want, such as
   `GitHub, Xcode, PyTorch`. They are added to the prompt and used to correct
-  near-misses afterwards.
+  near-misses afterwards: `bild` → `build`, `komit` → `commit`, and glued
+  Turkish suffixes get their apostrophe (`komponentleri` →
+  `component'leri`, `GitHubdan` → `GitHub'dan`, `commitledim` →
+  `commit'ledim`). Before rewriting a word the corrector asks macOS's spelling
+  dictionary for the dictation language; a word that exists there is left
+  alone. This is what stops `model` from becoming `modal` or `depo` from
+  becoming `deploy` — both happened with earlier versions. The one deliberate
+  exception is a term's own Turkish respelling (`komponent`, `statik`): if you
+  listed `component`, you get `component`. Azerbaijani uses the Turkish
+  dictionary; automatic language detection checks all available ones.
 - **Replacements** — exact `wrong → right` pairs for words the model
   consistently gets wrong.
 
@@ -206,6 +230,26 @@ inference, with a temperature ladder (`0.0, 0.4, 0.8`) that only engages when a
 segment's compression ratio signals a repetition loop. The reasoning behind
 each setting is documented in `Python/whisper_worker.py`.
 
+A few settings are deliberately *not* used, because they were measured and
+lost. Beam search (5 beams, the Whisper CLI default) was compared with greedy
+decoding on the archived recordings under added white and pink noise down to
+0 dB, at reduced gain and on a 23 s concatenation: greedy made fewer word
+errors (8.1 % vs 10.3 %) and ran 2.2× faster; beam's extra errors were
+rewrites of what was said (`abi` → `ağabey`). fp32 produced the same text as
+fp16 and was slower. The prompt, on the other hand, earns its place: on ten
+synthesized sentences with software terms it took term spelling from 11/20 to
+20/20 and halved the word error rate.
+
+Two safety nets cover the prompt's one measured failure. If the model answers
+a clip with nothing but a subtitle artifact, the app decodes the clip once
+more without the prompt before giving up. And on recordings longer than one
+30 s window — where Transformers prepends the prompt to every window — the
+worker checks for a window that is long but nearly empty (a 46 s test
+recording once came back with 19 s of speech replaced by "Bu videoyu
+izlediğiniz için teşekkür ederim.") and re-decodes without the prompt, which
+transcribed that recording word for word. Healthy audio never takes either
+second pass.
+
 ### Project layout
 
 ```
@@ -217,7 +261,8 @@ Sources/
   Output/         clipboard + paste injection
   Permissions/    microphone / input monitoring / accessibility checks
   Settings/       preferences and settings window
-  Transcription/  Python worker client and text post-processing
+  Transcription/  Python worker client, text post-processing, spelling guard
+Tests/            unit tests for the text pipeline
 Python/
   whisper_worker.py   model loading and transcription
   install_runtime.sh  creates the virtual environment
@@ -260,7 +305,8 @@ especially useful:
 
 The decoding settings in `Python/whisper_worker.py` were chosen by measuring
 real recordings, and the comments there explain the trade-offs. If you change
-them, please describe how you measured the effect in your pull request.
+them, please describe how you measured the effect in your pull request. Changes
+to the text pipeline should come with a case in `Tests/`.
 
 ## License
 
