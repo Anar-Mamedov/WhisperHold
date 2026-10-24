@@ -23,7 +23,7 @@ final class Preferences: ObservableObject {
 
     static let sampleTechnicalTerms =
         "Qwen, build, component, API, publish, commit, deploy, branch, merge, " +
-        "endpoint, GitHub, Xcode, Swift, debug, OpenAI, Whisper, " +
+        "endpoint, backend, backendci, frontend, frontendci, GitHub, Xcode, Swift, debug, OpenAI, Whisper, " +
         "Hugging Face, PyTorch, Transformers, safetensors"
 
     @Published var language: String { didSet { store.set(language, forKey: Key.language) } }

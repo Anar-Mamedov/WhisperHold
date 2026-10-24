@@ -162,7 +162,12 @@ Labels in the app are in Turkish; the English names are given alongside.
   near-misses afterwards: `bild` → `build`, `komit` → `commit`, and glued
   Turkish suffixes get their apostrophe (`komponentleri` →
   `component'leri`, `GitHubdan` → `GitHub'dan`, `commitledim` →
-  `commit'ledim`). Before rewriting a word the corrector asks macOS's spelling
+  `commit'ledim`, `backendci` → `backend'ci`). A term the model has never
+  seen in the prompt tends to come out as the nearest real Turkish word:
+  `backendci` was heard as `bekleyen`, and listing `backend` alone did not
+  change that — only listing `backendci` itself did. So list the forms you
+  actually say, suffixed ones included; the sample list ships with
+  `backendci` and `frontendci` for that reason. Before rewriting a word the corrector asks macOS's spelling
   dictionary for the dictation language; a word that exists there is left
   alone. This is what stops `model` from becoming `modal` or `depo` from
   becoming `deploy` — both happened with earlier versions. The one deliberate

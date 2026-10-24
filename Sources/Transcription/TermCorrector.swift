@@ -91,6 +91,8 @@ struct TermCorrector {
         "me", "ma", "mis", "mus", "yip", "yup", "ip", "up", "yim", "yiz",
         "sin", "sun", "lim", "lum", "ecek", "acak", "ecegiz", "acagiz",
         "se", "sa", "yse", "ysa", "ken", "erek", "arak", "ince", "inca",
+        // meslek/aidiyet: backend'ci, Swift'çi (ç ve ü katlanmış hâlleriyle)
+        "ci", "cu",
     ])
 
     private struct Entry {
@@ -148,6 +150,11 @@ struct TermCorrector {
             else { return token }
             return Self.matchingCase(of: stem, term: match) + suffix
         }
+
+        // Listedeki yazımın tamamen aynısı: dokunma. Ek ayrıştırmaya da
+        // girmemeli, yoksa kullanıcının "backendci" diye listelediği biçim
+        // "backend" kökünden "backend'ci"ye çevrilir.
+        if entries.contains(where: { $0.term == token }) { return token }
 
         // 1. Kelimenin tamamı: birebir (yalnızca büyük/küçük harf) veya
         //    Türkçe yazımıyla eşleşme.

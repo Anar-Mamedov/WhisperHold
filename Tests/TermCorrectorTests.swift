@@ -26,7 +26,8 @@ final class TermCorrectorTests: XCTestCase {
         "abi", "sana", "da", "yapalım", "arkada", "otomatikleşebilen", "işleri",
         "otomatikleştirsin", "şekilde", "çektim", "açtım", "lazım", "toplandı",
         "gittim", "büyük", "oldu", "sürüyor", "hepsi", "çağırdım", "gözden", "geçir",
-        "eğittik", "modemi", "değiştir", "ettik", "yaptık",
+        "eğittik", "modemi", "değiştir", "ettik", "yaptık", "dokümanı", "arkadaşım",
+        "verdi", "baktı",
     ]
 
     private func corrector(dictionary: Bool = true) -> TermCorrector {
@@ -95,6 +96,13 @@ final class TermCorrectorTests: XCTestCase {
             to: "Commit'i attım, commit'i attım, GitHub'dan çektim, Xcode'da açtım, commit'ledim, deploy'luyoruz, merge'lemek lazım."
         )
         assertCorrects("Apiyi çağırdım, apileri yazdım.", to: "API'yi çağırdım, API'leri yazdım.")
+        // -ci/-çi eki: listede yalnız kök varsa kesme işareti konur; kullanıcı
+        // "backendci" biçimini de listelemişse o yazım aynen kalır.
+        var rootOnly = corrector()
+        rootOnly.terms = ["backend", "frontend"]
+        XCTAssertEqual(rootOnly.correct("Dokümanı backendci arkadaşım verdi, frontendciler de baktı."),
+                       "Dokümanı backend'ci arkadaşım verdi, frontend'ciler de baktı.")
+        assertCorrects("Dokümanı backendci arkadaşım verdi.", to: "Dokümanı backendci arkadaşım verdi.")
         // Noktasız ı içeren ekler: TTS testinde "Branchı" → "Branch" olup eki yutuyordu.
         assertCorrects("Branchı publish etmeden önce componentları ve apıyı kontrol et.",
                        to: "Branch'ı publish etmeden önce component'ları ve API'yı kontrol et.")
@@ -162,5 +170,5 @@ final class TermCorrectorTests: XCTestCase {
 /// listeyle aynı kaldığı denetleniyor.
 let Preferences_sampleTechnicalTerms =
     "Qwen, build, component, API, publish, commit, deploy, branch, merge, " +
-    "endpoint, GitHub, Xcode, Swift, debug, OpenAI, Whisper, " +
+    "endpoint, backend, backendci, frontend, frontendci, GitHub, Xcode, Swift, debug, OpenAI, Whisper, " +
     "Hugging Face, PyTorch, Transformers, safetensors"
