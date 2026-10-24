@@ -17,7 +17,8 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import term_bias  # noqa: E402  (sits next to this file in the app bundle)
+import gpu_lock  # noqa: E402  (sits next to this file in the app bundle)
+import term_bias  # noqa: E402
 import term_llm  # noqa: E402
 import memory as memory_store  # noqa: E402
 
@@ -277,7 +278,8 @@ def load_runtime() -> tuple[Any, Any, Any, str, str, dict[str, Any]]:
     # It does NOT feed the previous window's text to the next one: that is
     # `condition_on_prev_tokens`, which stays off here. Turning it on would
     # carry a bad window's text forward into the next, a different trade.
-    model.to(device)
+    with gpu_lock.LOCK:
+        model.to(device)
 
     verification = {
         "model_id": MODEL_ID,
@@ -379,10 +381,11 @@ def decode(
         inputs = processor.feature_extractor(
             audio, sampling_rate=SAMPLE_RATE, return_tensors="pt", return_attention_mask=True
         )
-    features = inputs.input_features.to(device, runtime["dtype_torch"])
-    attention_mask = inputs.attention_mask.to(device)
-
-    with torch.inference_mode():
+    # The GPU lock: the smart-correction and embedding models load on other
+    # threads and must not touch Metal while a dictation is being decoded.
+    with gpu_lock.LOCK, torch.inference_mode():
+        features = inputs.input_features.to(device, runtime["dtype_torch"])
+        attention_mask = inputs.attention_mask.to(device)
         output = model.generate(
             features,
             attention_mask=attention_mask,
@@ -465,7 +468,8 @@ def transcribe(
     }
     if language != "auto":
         generate_kwargs["language"] = language
-    prompt_ids = make_prompt(processor, prompt, torch, runtime["device"])
+    with gpu_lock.LOCK:
+        prompt_ids = make_prompt(processor, prompt, torch, runtime["device"])
     if prompt_ids is not None:
         generate_kwargs["prompt_ids"] = prompt_ids
 

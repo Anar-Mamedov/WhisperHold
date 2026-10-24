@@ -32,6 +32,9 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import gpu_lock  # noqa: E402
+
 # The embedding model is the one OpenClaw's memory search uses by default:
 # EmbeddingGemma 300M, quantization-aware Q8_0 GGUF, run with llama.cpp on
 # Metal. If llama.cpp is not installed (it compiles from source and can fail
@@ -77,13 +80,15 @@ class GemmaEmbedder:
         except Exception:
             snapshot = snapshot_download(GEMMA_MODEL_ID, allow_patterns=[GEMMA_FILE_PATTERN])
         path = sorted(glob.glob(os.path.join(snapshot, GEMMA_FILE_PATTERN)))[0]
-        self.model = Llama(model_path=path, embedding=True, n_gpu_layers=-1, n_ctx=2048, verbose=False)
+        with gpu_lock.LOCK:
+            self.model = Llama(model_path=path, embedding=True, n_gpu_layers=-1, n_ctx=2048, verbose=False)
         self.device = "metal"
 
     def encode(self, texts: list[str], kind: str = "passage") -> list[list[float]]:
         out: list[list[float]] = []
         for text in texts:
-            vector = self.model.embed(text)
+            with gpu_lock.LOCK:
+                vector = self.model.embed(text)
             if vector and isinstance(vector[0], list):
                 vector = vector[0]
             norm = math.sqrt(sum(value * value for value in vector)) or 1.0
@@ -124,7 +129,9 @@ class Embedder:
         self.device = "mps" if torch.backends.mps.is_available() else "cpu"
         dtype = torch.float16 if self.device == "mps" else torch.float32
         self.tokenizer = AutoTokenizer.from_pretrained(snapshot, local_files_only=True)
-        self.model = AutoModel.from_pretrained(snapshot, local_files_only=True, dtype=dtype).eval().to(self.device)
+        model = AutoModel.from_pretrained(snapshot, local_files_only=True, dtype=dtype).eval()
+        with gpu_lock.LOCK:
+            self.model = model.to(self.device)
         self.torch = torch
 
     def encode(self, texts: list[str], kind: str = "passage") -> list[list[float]]:
@@ -133,8 +140,9 @@ class Embedder:
         torch = self.torch
         batch = self.tokenizer(
             [f"{kind}: {text}" for text in texts], padding=True, truncation=True, max_length=256, return_tensors="pt"
-        ).to(self.device)
-        with torch.inference_mode():
+        )
+        with gpu_lock.LOCK, torch.inference_mode():
+            batch = batch.to(self.device)
             hidden = self.model(**batch).last_hidden_state
             mask = batch["attention_mask"].unsqueeze(-1).to(hidden.dtype)
             pooled = (hidden * mask).sum(1) / mask.sum(1).clamp(min=1)

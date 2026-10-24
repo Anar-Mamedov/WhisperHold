@@ -24,6 +24,9 @@ import time
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import gpu_lock  # noqa: E402
+
 MODEL_ID = "Qwen/Qwen3-4B-Instruct-2507"
 MAX_NEW_TOKENS = 160
 MAX_REPLACEMENTS = 8
@@ -218,7 +221,10 @@ class SmartCorrector:
             dtype = torch.float16 if device == "mps" else torch.float32
             tokenizer = AutoTokenizer.from_pretrained(snapshot, local_files_only=True)
             model = AutoModelForCausalLM.from_pretrained(snapshot, local_files_only=True, dtype=dtype)
-            model.eval().to(device)
+            model.eval()
+            # Weights go to the GPU only while no dictation is being decoded.
+            with gpu_lock.LOCK:
+                model.to(device)
             with self.lock:
                 self.tokenizer, self.model, self.device = tokenizer, model, device
             self.report("ready", f"{MODEL_ID} · {device.upper()}")
@@ -244,10 +250,10 @@ class SmartCorrector:
         encoded = tokenizer.apply_chat_template(
             messages, add_generation_prompt=True, return_tensors="pt", return_dict=True, enable_thinking=False
         )
-        input_ids = encoded["input_ids"].to(self.device)
-        attention_mask = encoded["attention_mask"].to(self.device)
         started = time.time()
-        with torch.inference_mode():
+        with gpu_lock.LOCK, torch.inference_mode():
+            input_ids = encoded["input_ids"].to(self.device)
+            attention_mask = encoded["attention_mask"].to(self.device)
             output = model.generate(
                 input_ids=input_ids,
                 attention_mask=attention_mask,

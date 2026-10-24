@@ -406,6 +406,18 @@ project.yml       XcodeGen project definition
 - **"Python 3 bulunamadı" (Python 3 not found) during setup.** Install Python
   with `brew install python@3.11` and choose **Modeli yeniden başlat** (Restart
   model) on the Model tab.
+- **What did the app do?** Everything the worker reports, model loading,
+  smart-correction and memory status, and learned corrections are written to
+  `~/Library/Application Support/WhisperHold/whisperhold.log` (capped at
+  1 MB); macOS's unified log does not reliably show this menu bar app.
+- **"Python beklenmedik şekilde kesildi" right after pressing the shortcut.**
+  Fixed in the current build: PyTorch's MPS backend is not thread-safe, and
+  the smart-correction and embedding models used to be moved to the GPU on a
+  background thread while Whisper was decoding the first dictation after a
+  worker restart, which tripped a Metal assertion
+  (`_status < MTLCommandBufferStatusCommitted`). All GPU work now goes
+  through one lock (`Python/gpu_lock.py`); a model finishing its load waits
+  for the dictation to finish instead.
 - **Starting over.** Quit the app and delete
   `~/Library/Application Support/WhisperHold`. The Python environment and
   the model are recreated on next launch.
