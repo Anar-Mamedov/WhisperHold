@@ -2,13 +2,3 @@
 # çalıştıran llama.cpp. Kaynaktan derlenir (Metal); kurulamazsa hafıza
 # transformers tabanlı yedek modele (multilingual-e5-small) düşer.
 llama-cpp-python==0.3.36
-
-# İsteğe bağlı: akıllı düzeltme modelini Apple'ın MLX çatısıyla çalıştırır
-# (4-bit Gemma 4; bkz. term_llm.py). Kurulamazsa transformers ile Qwen3-4B
-# yüklenir. Yalnızca Apple Silicon'da kurulabilir.
-mlx-lm==0.32.2
-
-# İsteğe bağlı: akıllı düzeltmenin önerdiği kelimenin gerçek bir kelime olup
-# olmadığını macOS'un yazım sözlüğüne sormak için (dictionary.py). Yoksa
-# yalnızca sözlük terimlerine dönüşen öneriler uygulanır.
-pyobjc-framework-Cocoa==12.2.2

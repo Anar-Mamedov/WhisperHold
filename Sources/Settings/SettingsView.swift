@@ -167,6 +167,51 @@ private struct ModelSettings: View {
                 }
                 .controlSize(.small)
 
+                // Kurulum betiğinin bulduğu durum: hangi paket var, derleyici var
+                // mı, llama.cpp neden yok. Kullanıcı eksiği burada görür ve
+                // Command Line Tools'u kurduktan sonra tek düğmeyle tamamlar.
+                if let components = controller.components {
+                    GroupBox("Bileşenler") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 5) {
+                                verificationRow("Python", "\(components.python.version)")
+                                ForEach(RuntimeComponents.displayNames, id: \.key) { item in
+                                    verificationRow(item.label, components.statusText(for: item.key))
+                                }
+                                verificationRow("Command Line Tools", components.commandLineTools ? "kurulu" : "kurulu değil")
+                            }
+                            if components.llamaMissingForLackOfTools {
+                                Text("llama.cpp kaynaktan derlenir ve Xcode Command Line Tools gerektirir. Kurulana kadar hafıza, yedek embedding modeliyle (multilingual-e5-small) çalışır; dikte ve akıllı düzeltme etkilenmez.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            HStack {
+                                if !components.commandLineTools {
+                                    Button("Command Line Tools'u kur") { controller.installCommandLineTools() }
+                                }
+                                if !components.missing.isEmpty {
+                                    Button(controller.isInstallingComponents ? "Kuruluyor…" : "Eksik paketleri kur") {
+                                        controller.installMissingComponents()
+                                    }
+                                    .disabled(controller.isInstallingComponents || controller.isPreparingModel || !components.commandLineTools)
+                                    .help(components.commandLineTools ? "Eksik paketleri kurar ve motoru yeniden başlatır" : "Önce Command Line Tools kurulmalı")
+                                }
+                                Button("Yenile") { controller.refreshComponents() }
+                            }
+                            .controlSize(.small)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(4)
+                    }
+                    .onAppear { controller.refreshComponents() }
+                } else {
+                    Text("Bileşen durumu henüz yazılmadı; ilk kurulum bittiğinde burada görünür.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .onAppear { controller.refreshComponents() }
+                }
+
                 DisclosureGroup("Yerel dosya yolları", isExpanded: $showPaths) {
                     VStack(alignment: .leading, spacing: 6) {
                         if let info = controller.verification {

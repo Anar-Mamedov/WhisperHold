@@ -58,6 +58,15 @@ final class AppController: ObservableObject {
     @Published var settingsTab = SettingsTab.general
     /// Akıllı düzeltme modelinin durumu (indiriliyor, hazır, hata). Yoksa `nil`.
     @Published private(set) var smartCorrectionStatus: String?
+    /// Arka planda bir model iniyor ya da yükleniyor (akıllı düzeltme, hafıza):
+    /// menüde gösterilir ve worker bu sırada boşta diye kapatılmaz.
+    @Published private(set) var preparation: String?
+    /// Ortamdaki bileşenler (Ayarlar → Model → Bileşenler); bkz. `RuntimeComponents`.
+    @Published private(set) var components: RuntimeComponents?
+    @Published private(set) var isInstallingComponents = false
+    private var componentsNoticeShown = false
+    private var smartCorrectionBusy = false
+    private var memoryEmbedderBusy = false
     /// Hafıza durumu: "12 dikte · 3 düzeltme · embedding hazır".
     @Published private(set) var memoryStatus: String?
 
@@ -105,6 +114,8 @@ final class AppController: ObservableObject {
             default: embedderText = "embedding kapalı"
             }
             self.memoryStatus = "\(dictations) dikte · \(corrections) düzeltme · \(embedderText)"
+            self.memoryEmbedderBusy = embedder == "loading"
+            self.refreshPreparation()
         }
         engine.restorePendingMemoryCommands(preferences.pendingMemoryCommands)
         engine.onDeepState = { [weak self] state, detail in
@@ -120,6 +131,8 @@ final class AppController: ObservableObject {
             case "failed": self.smartCorrectionStatus = detail
             default: self.smartCorrectionStatus = nil
             }
+            self.smartCorrectionBusy = state == "downloading" || state == "loading"
+            self.refreshPreparation()
         }
 
         Task { await bootstrap() }
@@ -210,6 +223,12 @@ final class AppController: ObservableObject {
             if !isDictationActive { status = .preparing(detail) }
         case .ready:
             modelActivity = nil
+            refreshComponents()
+            if let components, components.llamaMissingForLackOfTools, !componentsNoticeShown {
+                // Kullanıcı bunu başka türlü göremez: günlükte tek satır.
+                componentsNoticeShown = true
+                lastNotice = "Hafıza yedek embedding modeliyle çalışıyor: llama.cpp için Xcode Command Line Tools gerekiyor (Ayarlar → Model → Bileşenler)."
+            }
             if preferences.smartCorrection { engine.loadSmartCorrection() }
             if preferences.rememberDictations { engine.loadMemory() }
             engine.flushPendingMemoryCommands()
@@ -242,6 +261,25 @@ final class AppController: ObservableObject {
         idleUnloadTask = nil
     }
 
+    /// Menüdeki "hazırlanıyor" satırı: hangi model iniyor ya da yükleniyor.
+    private func refreshPreparation() {
+        if smartCorrectionBusy, let detail = smartCorrectionStatus {
+            preparation = detail
+        } else if memoryEmbedderBusy {
+            preparation = "Hafıza embedding modeli yükleniyor…"
+        } else {
+            preparation = nil
+        }
+    }
+
+    /// İlk kurulumda akıllı düzeltme modeli (~11 GB) worker'ın içinde iner.
+    /// Boşta kalma sayacı o sırada worker'ı kapatırsa indirme yarım kalır
+    /// (bir sonraki açılışta kaldığı yerden sürer ama kullanıcı hiç dikte
+    /// etmezse hiç bitmez), o yüzden indirme ve yükleme bitene kadar beklenir.
+    private var isPreparingModels: Bool {
+        smartCorrectionBusy || memoryEmbedderBusy || isDeepCorrecting
+    }
+
     private func scheduleIdleModelUnload() {
         cancelIdleModelUnload()
         guard engine.isReady, !isDictationActive else { return }
@@ -253,6 +291,10 @@ final class AppController: ObservableObject {
                 return
             }
             guard let self, !self.isDictationActive, self.engine.isReady else { return }
+            if self.isPreparingModels {
+                self.scheduleIdleModelUnload()
+                return
+            }
             self.engine.unloadFromMemory()
             self.modelTask = nil
             self.idleUnloadTask = nil
@@ -695,6 +737,58 @@ final class AppController: ObservableObject {
     private func copyToPasteboard(_ text: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    /// Ayarlar → Model → Bileşenler: kurulum betiğinin yazdığı durumu yeniden okur.
+    /// Command Line Tools'un şu anki varlığına ayrıca bakılır, böylece kullanıcı
+    /// kurar kurmaz düğme doğru görünür.
+    func refreshComponents() {
+        var fresh = engine.components()
+        if fresh != nil, RuntimeComponents.compilerInstalled() { fresh?.commandLineTools = true }
+        components = fresh
+    }
+
+    /// "Eksik paketleri kur": worker durdurulur, betik yalnız isteğe bağlı
+    /// paketleri (llama.cpp) kurar, worker yeniden başlar.
+    func installMissingComponents() {
+        guard !isInstallingComponents, !isDictationActive else { return }
+        isInstallingComponents = true
+        cancelIdleModelUnload()
+        modelTask?.cancel()
+        modelTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                self.isInstallingComponents = false
+                self.refreshComponents()
+            }
+            do {
+                self.engine.unloadFromMemory()
+                self.status = .preparing("Eksik paketler kuruluyor…")
+                try await self.engine.installOptionalPackages()
+                try await self.engine.prepare()
+                if !self.isDictationActive {
+                    self.status = .idle
+                    self.scheduleIdleModelUnload()
+                }
+                AppLog.write("bileşenler: eksik paket kurulumu bitti")
+            } catch {
+                self.status = .failed(error.localizedDescription)
+                AppLog.write("bileşenler: kurulum başarısız — \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Apple'ın Command Line Tools kurulum penceresini açar.
+    func installCommandLineTools() {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/xcode-select")
+        process.arguments = ["--install"]
+        do {
+            try process.run()
+            lastNotice = "Command Line Tools kurulumu başlatıldı; bitince \"Eksik paketleri kur\"a basın."
+        } catch {
+            lastNotice = "Command Line Tools kurulumu başlatılamadı: \(error.localizedDescription)"
+        }
     }
 
     func revealModelFolder() {

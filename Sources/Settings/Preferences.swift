@@ -92,7 +92,7 @@ final class Preferences: ObservableObject {
         shortcut = Self.decode(ShortcutSpec.self, forKey: Key.shortcut, from: store) ?? .default
         replacements = Self.decode([String: String].self, forKey: Key.replacements, from: store) ?? [:]
         useBuiltInVocabulary = store.object(forKey: Key.builtInVocabulary) as? Bool ?? true
-        smartCorrection = store.object(forKey: Key.smartCorrection) as? Bool ?? false
+        smartCorrection = store.object(forKey: Key.smartCorrection) as? Bool ?? true
         autoLearn = store.object(forKey: Key.autoLearn) as? Bool ?? true
         rememberDictations = store.object(forKey: Key.remember) as? Bool ?? true
         learnedCorrections = Self.decode([LearnedCorrection].self, forKey: Key.learned, from: store) ?? []

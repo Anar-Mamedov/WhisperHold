@@ -17,6 +17,13 @@ struct MenuBarView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(3)
+                    // İlk açılışta modeller arka planda iner; dikte bu arada çalışır.
+                    if let preparation = controller.preparation {
+                        Text(preparation)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
                 }
                 Spacer()
                 if permissions.allGranted {

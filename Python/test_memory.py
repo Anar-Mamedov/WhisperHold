@@ -118,3 +118,36 @@ class MemoryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WiderFakeEmbedder(FakeEmbedder):
+    """Pretends to be EmbeddingGemma after the fallback model: one dimension more."""
+
+    name = "wider"
+
+    def encode(self, texts, kind="passage"):
+        return [vector + [0.5] for vector in super().encode(texts, kind)]
+
+
+class EmbedderSwitchTests(unittest.TestCase):
+    def test_rows_from_another_model_are_re_embedded(self) -> None:
+        import tempfile
+
+        folder = tempfile.TemporaryDirectory()
+        store = memory.Memory(Path(folder.name) / "memory.sqlite", embedder_factory=FakeEmbedder)
+        store.start_embedder(); store.thread.join()
+        store.remember_dictation("Pull request'i merge ettim.")
+        store.remember_correction("komit", "commit", "Komit attım, bild aldım.")
+        old_width = len(store.db.execute("SELECT embedding FROM dictations").fetchone()[0])
+
+        # llama.cpp installed later: the memory reopens with the wider model.
+        switched = memory.Memory(Path(folder.name) / "memory.sqlite", embedder_factory=WiderFakeEmbedder)
+        switched.start_embedder(); switched.thread.join()
+        widths = {len(row[0]) for table in ("dictations", "corrections")
+                  for row in switched.db.execute(f"SELECT embedding FROM {table}")}
+        self.assertEqual(widths, {old_width + 4})
+        # Mixed sizes never score; same sizes do.
+        self.assertEqual(memory._dot([1.0, 0.0], [1.0, 0.0, 0.0]), 0.0)
+        self.assertEqual(memory._dot([1.0, 0.0], [1.0, 0.0]), 1.0)
+        self.assertTrue(switched.nearest_corrections("komit attım"))
+        folder.cleanup()

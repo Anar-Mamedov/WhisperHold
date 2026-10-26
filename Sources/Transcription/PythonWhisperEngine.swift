@@ -397,14 +397,34 @@ final class PythonWhisperEngine {
 
     // MARK: - Python kurulumu
 
+    /// Kurulum betiğinin yazdığı bileşen durumu (bkz. `RuntimeComponents`).
+    static var componentsURL: URL {
+        runtimeRoot.appendingPathComponent("components.json")
+    }
+
+    func components() -> RuntimeComponents? {
+        RuntimeComponents.load(from: Self.componentsURL)
+    }
+
     private func installRuntime() async throws {
+        try await runInstaller(mode: "full")
+    }
+
+    /// Yalnız isteğe bağlı paketleri (llama.cpp) var olan ortama kurar;
+    /// Command Line Tools sonradan kurulduğunda Ayarlar'dan çağrılır. Worker
+    /// durdurulmuş olmalı; bitince `prepare()` ile yeniden başlatılır.
+    func installOptionalPackages() async throws {
+        try await runInstaller(mode: "optional")
+    }
+
+    private func runInstaller(mode: String) async throws {
         let script = try bundledResource("install_runtime.sh")
         let requirements = try bundledResource("requirements.txt")
-        state = .installing("Python/PyTorch motoru kuruluyor…")
+        state = .installing(mode == "optional" ? "Eksik paketler kuruluyor…" : "Python/PyTorch motoru kuruluyor…")
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        process.arguments = [script.path, Self.runtimeRoot.path, requirements.path]
+        process.arguments = [script.path, Self.runtimeRoot.path, requirements.path, mode]
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = pipe

@@ -10,3 +10,10 @@ transformers==5.20.2
 huggingface-hub==2.3.0
 safetensors==0.8.0
 numpy==2.4.6
+
+# Akıllı düzeltme modeli (Gemma 4, 4-bit) Apple'ın MLX çatısıyla çalışır;
+# macOS 14+ Apple Silicon için hazır wheel'ler var, derleme yok.
+mlx-lm==0.32.2
+# Akıllı düzeltmenin önerdiği kelime gerçek bir kelime mi? macOS'un kendi
+# yazım sözlüğüne sormak için (dictionary.py).
+pyobjc-framework-Cocoa==12.2.2

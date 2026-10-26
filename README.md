@@ -84,7 +84,7 @@ is needed.
   taught exactly that pair. Measured on the user's own hearing errors it
   removed more than a third of them and changed none of 51 correct
   dictations; with the user's past corrections as examples it also carries a
-  taught fix over to new sentences. Off by default; it adds about four
+  taught fix over to new sentences. On by default; it adds about four
   seconds per dictation. **Derin düzelt** in the menu asks a bigger model
   (Gemma 4 26B-A4B, loaded for that one request and dropped again; its
   first use downloads ~15 GB) to look at the last transcript once more and
@@ -108,12 +108,15 @@ is needed.
 - macOS 14 Sonoma or later
 - An Apple Silicon Mac (M1 or newer). The pinned PyTorch release ships no
   Intel macOS builds.
-- Xcode 15 or later
-- Python 3 — 3.11 is preferred: `brew install python@3.11`
-- About 4.5 GB of free disk space: ~0.9 GB for the Python environment,
-  ~2.9 GB for Whisper and ~0.3–0.5 GB for the memory's embedding model;
-  another 11 GB if you turn on smart correction (Gemma 4 12B through MLX;
-  the Transformers fallback model is 8 GB)
+- Xcode 15 or later (to build the app)
+- About 17 GB of free disk space: ~1.5 GB for the Python environment,
+  ~2.9 GB for Whisper, ~0.3–0.5 GB for the memory's embedding model and
+  ~11 GB for the smart-correction model (Gemma 4 12B through MLX). No
+  Python needs to be installed: the app uses a Homebrew or python.org
+  Python 3.10–3.12 if one is there and otherwise downloads its own.
+  The Command Line Tools are only needed to compile llama.cpp for the
+  EmbeddingGemma embeddings; without them the memory uses
+  multilingual-e5-small, downloaded on first use.
 - [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`),
   only if you change `project.yml`
 
@@ -192,12 +195,16 @@ git-ignored.
    - **Accessibility** — to send `⌘V` to the app you are typing in.
 
    macOS may require restarting the app after granting Accessibility.
-2. **Wait for setup.** The app creates its own Python virtual environment in
-   `~/Library/Application Support/WhisperHold/runtime`, then downloads the
-   model from Hugging Face into
-   `~/Library/Application Support/WhisperHold/HuggingFace`. Depending on your
-   connection this can take a while; progress is shown in the menu bar panel.
-   Later launches load everything from disk.
+2. **Wait for setup.** Everything else is automatic. The app creates its own
+   Python environment in `~/Library/Application Support/WhisperHold/runtime`
+   (downloading a Python if the machine has none), downloads Whisper into
+   `~/Library/Application Support/WhisperHold/HuggingFace`, creates the
+   memory database, and — as soon as Whisper is ready and dictation works —
+   downloads the memory's embedding model and the smart-correction model in
+   the background (~11 GB; the panel shows what is being prepared, and the
+   worker is kept alive until the download is done). Depending on your
+   connection the whole thing can take a while. Later launches load
+   everything from disk.
 
 When the model is ready, **Settings → Model** shows the source URL, the actual
 path and size of the safetensors file, the layer count, and the PyTorch and
@@ -220,7 +227,7 @@ Labels in the app are in Turkish; the English names are given alongside.
 | Tab | What it controls |
 | --- | --- |
 | Genel (General) | Shortcut, dictation language, input device, sound cues, recording indicator, launch at login |
-| Model | Model status and verification details, restart the model, open the model folder |
+| Model | Model status and verification details, restart the model, open the model folder, installed components with repair buttons |
 | Kayıtlar (Recordings) | The recording archive: play, re-transcribe, see the latest text |
 | Sözlük (Vocabulary) | Context sentence, technical terms, built-in software vocabulary, smart correction, learned corrections, exact replacements |
 | Gelişmiş (Advanced) | Pre-roll, how long the microphone stays warm, minimum duration, silence threshold, archive folder |
@@ -252,9 +259,10 @@ Labels in the app are in Turkish; the English names are given alongside.
   afterwards, but more cautiously than your own list: a built-in term never
   turns a real Turkish word into its English spelling (`buton` stays `buton`
   unless *you* list `button`).
-- **Smart correction** — off by default. Turning it on downloads
+- **Smart correction** — on by default. The app downloads
   `mlx-community/gemma-4-12B-it-qat-4bit` (~11 GB) into the app's model
-  cache and runs it with MLX next to Whisper, about 4 s per dictation;
+  cache on first launch and runs it with MLX next to Whisper, about 4 s per
+  dictation;
   without `mlx-lm` the worker falls back to Qwen3-4B-Instruct through
   PyTorch. After each dictation the model is shown the sentence after a
   system prompt, ten fixed examples (half of them "nothing to change") and
@@ -510,9 +518,23 @@ project.yml       XcodeGen project definition
   rebuild needs the permissions again; see [Code signing](#code-signing).
 - **Text appears on the clipboard but is not pasted.** Accessibility
   permission is missing, or a password field (secure input) is active.
-- **"Python 3 bulunamadı" (Python 3 not found) during setup.** Install Python
-  with `brew install python@3.11` and choose **Modeli yeniden başlat** (Restart
-  model) on the Model tab.
+- **Setup stops at the Python step.** The app looks for a Python 3.10–3.12
+  from Homebrew or python.org and otherwise downloads a standalone one
+  (verified by checksum); if that download fails (offline, blocked), choose
+  **Modeli yeniden başlat** (Restart model) on the Model tab once you are
+  online, or install Python with `brew install python@3.11`.
+- **"llama.cpp (EmbeddingGemma): kurulamadı — Command Line Tools yok"** in
+  Settings → Model → Bileşenler (Components). llama.cpp compiles from source
+  and needs Xcode's Command Line Tools; the installer skips it rather than
+  trigger Apple's install dialog mid-setup, and the memory runs on the
+  fallback embedding model meanwhile (dictation and smart correction are
+  unaffected). Click **Command Line Tools'u kur** (Apple's installer opens),
+  then **Eksik paketleri kur** (Install missing packages): the worker stops,
+  the package is built, the worker restarts, and the memory moves to
+  EmbeddingGemma, re-embedding everything the fallback model had indexed
+  (the two models' vectors are not comparable). The same panel lists every
+  component the installer found — Python, PyTorch, Transformers, MLX, PyObjC,
+  llama.cpp — with versions, from `runtime/components.json`.
 - **What did the app do?** Everything the worker reports, model loading,
   smart-correction and memory status, and learned corrections are written to
   `~/Library/Application Support/WhisperHold/whisperhold.log` (capped at

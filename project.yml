@@ -73,6 +73,7 @@ targets:
       - path: Sources/Transcription/SpellingGuard.swift
       - path: Sources/Transcription/BuiltInVocabulary.swift
       - path: Sources/Learning/CorrectionLearner.swift
+      - path: Sources/Transcription/RuntimeComponents.swift
 
     configFiles:
       Debug: Config/Signing.xcconfig

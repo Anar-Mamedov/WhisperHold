@@ -171,6 +171,10 @@ def _unpack(blob: bytes) -> list[float]:
 
 
 def _dot(a: list[float], b: list[float]) -> float:
+    """Cosine of two unit vectors; zero when they come from different models
+    (a vector of another dimension is not comparable, not merely dissimilar)."""
+    if len(a) != len(b):
+        return 0.0
     return sum(x * y for x, y in zip(a, b))
 
 
@@ -253,13 +257,20 @@ class Memory:
             self.report("failed", f"Embedding modeli yüklenemedi: {error}")
 
     def backfill(self, limit: int = 500) -> None:
-        """Rows stored before the embedder was ready get their vectors now."""
+        """Rows stored before the embedder was ready get their vectors now — and
+        so do rows embedded by a different model. The fallback model
+        (multilingual-e5-small, 384 dimensions) and EmbeddingGemma (768) are
+        not comparable; when llama.cpp is installed later and the memory moves
+        to EmbeddingGemma, everything the fallback embedded is redone."""
         with self.lock:
             if self.embedder is None:
                 return
+            width = len(self.embedder.encode(["boyut"])[0]) * 4   # float32 bytes per vector
             for table, column in (("dictations", "text"), ("corrections", "context"), ("contexts", "text")):
                 rows = self.db.execute(
-                    f"SELECT id, {column} AS text FROM {table} WHERE embedding IS NULL ORDER BY id DESC LIMIT ?", (limit,)
+                    f"SELECT id, {column} AS text FROM {table} WHERE embedding IS NULL OR length(embedding) != ? "
+                    f"ORDER BY id DESC LIMIT ?",
+                    (width, limit),
                 ).fetchall()
                 for start in range(0, len(rows), 16):
                     chunk = rows[start:start + 16]

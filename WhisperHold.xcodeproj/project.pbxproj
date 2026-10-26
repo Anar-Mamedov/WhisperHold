@@ -38,6 +38,7 @@
 		A3AA736EAA47B1D889715C82 /* TextPostProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD278F8C2C435E92F5D627A7 /* TextPostProcessor.swift */; };
 		A60403B7FD42FE78234CEEB3 /* AudioTrimmer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 493C6CC2B4F43EA92DCF230F /* AudioTrimmer.swift */; };
 		A931685385A0CDAC3025E3AF /* AudioDevices.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94F92F11157BEC603FD50D8E /* AudioDevices.swift */; };
+		BAE49059AACE4CA826E9BDE7 /* RuntimeComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5354D144F33EAD584176C0F9 /* RuntimeComponents.swift */; };
 		BB4401231E73C76A63229776 /* AppLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1D34DC5A11983733D91934C /* AppLog.swift */; };
 		BD2F86B342DC68D86CEABE8C /* BuiltInVocabulary.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1EF34161DE6B1A25142DF45 /* BuiltInVocabulary.swift */; };
 		C308696D203EC549B87C81F1 /* TermCorrector.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10B34DFC3FBD4D013B228CE /* TermCorrector.swift */; };
@@ -45,7 +46,9 @@
 		D6B9BB928B9B8001C70DF333 /* MenuBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF6960984BB115B72EFEA623 /* MenuBarView.swift */; };
 		D76376031EEE36A7D5B024C3 /* Python in Resources */ = {isa = PBXBuildFile; fileRef = 39FA224761A9177A7BC8A27E /* Python */; };
 		D993F3270DECB3E5F4EBCFAA /* PasteWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C62B4D0E98D33D31C7F8E4B /* PasteWatcher.swift */; };
+		E24153004F0E79E7B1A31F06 /* RuntimeComponentsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52A155EC2416A699470FB980 /* RuntimeComponentsTests.swift */; };
 		E6DC0965FF7FABCB885D3A9C /* BuiltInVocabularyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 228AC366602ED1CC1F586939 /* BuiltInVocabularyTests.swift */; };
+		FAC79F40B930BB6DDD1720F9 /* RuntimeComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5354D144F33EAD584176C0F9 /* RuntimeComponents.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -61,6 +64,8 @@
 		493C6CC2B4F43EA92DCF230F /* AudioTrimmer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioTrimmer.swift; sourceTree = "<group>"; };
 		4B70DB4A6C443FBA97ACA2AB /* TextPostProcessorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextPostProcessorTests.swift; sourceTree = "<group>"; };
 		513FD41F6B5ACF6F76D7802A /* RecordingArchive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingArchive.swift; sourceTree = "<group>"; };
+		52A155EC2416A699470FB980 /* RuntimeComponentsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeComponentsTests.swift; sourceTree = "<group>"; };
+		5354D144F33EAD584176C0F9 /* RuntimeComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeComponents.swift; sourceTree = "<group>"; };
 		5EB046AE6F1CB9D8AF2940CC /* SpellingGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpellingGuard.swift; sourceTree = "<group>"; };
 		6DA2073C770C9E76E6B4C961 /* Preferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Preferences.swift; sourceTree = "<group>"; };
 		7546221863B05D1E407BF6A5 /* Permissions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Permissions.swift; sourceTree = "<group>"; };
@@ -105,6 +110,7 @@
 			children = (
 				D1EF34161DE6B1A25142DF45 /* BuiltInVocabulary.swift */,
 				1433DEC6F54029D908C85179 /* PythonWhisperEngine.swift */,
+				5354D144F33EAD584176C0F9 /* RuntimeComponents.swift */,
 				5EB046AE6F1CB9D8AF2940CC /* SpellingGuard.swift */,
 				A10B34DFC3FBD4D013B228CE /* TermCorrector.swift */,
 				BD278F8C2C435E92F5D627A7 /* TextPostProcessor.swift */,
@@ -126,6 +132,7 @@
 				228AC366602ED1CC1F586939 /* BuiltInVocabularyTests.swift */,
 				319D794921C6CC2F821C5D86 /* CorrectionLearnerTests.swift */,
 				80FD994565BA864449FFE939 /* PreferencesSampleTests.swift */,
+				52A155EC2416A699470FB980 /* RuntimeComponentsTests.swift */,
 				FD6AC79F6220D1E0D6656233 /* SpellingGuardTests.swift */,
 				07AFBC6EC18FA5B1D5C57586 /* TermCorrectorTests.swift */,
 				4B70DB4A6C443FBA97ACA2AB /* TextPostProcessorTests.swift */,
@@ -360,6 +367,7 @@
 				1C5CFDC9541F5DF5D2866D81 /* RecordingArchive.swift in Sources */,
 				073ECD687F2FCEF653940119 /* RecordingIndicator.swift in Sources */,
 				5E7E4BB7FA1E6734B6FB5DAE /* RecordingsSettings.swift in Sources */,
+				FAC79F40B930BB6DDD1720F9 /* RuntimeComponents.swift in Sources */,
 				436C2ACE749917D368EF73DF /* SettingsView.swift in Sources */,
 				655F8F5C50DE5A9AC72FD96C /* ShortcutRecorderView.swift in Sources */,
 				94BBD9BD4733F6C9F5465008 /* ShortcutSpec.swift in Sources */,
@@ -380,6 +388,8 @@
 				690F50C143129171880F3C51 /* CorrectionLearner.swift in Sources */,
 				58DBC98E7E38C1F08494648A /* CorrectionLearnerTests.swift in Sources */,
 				9E07451307FA7B0F5F65ACD7 /* PreferencesSampleTests.swift in Sources */,
+				BAE49059AACE4CA826E9BDE7 /* RuntimeComponents.swift in Sources */,
+				E24153004F0E79E7B1A31F06 /* RuntimeComponentsTests.swift in Sources */,
 				125B62903D398B5A708916EB /* SpellingGuard.swift in Sources */,
 				4ECAED9FC0219DC0875AEA9A /* SpellingGuardTests.swift in Sources */,
 				18094E00F91D936568BF95B9 /* TermCorrector.swift in Sources */,
