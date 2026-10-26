@@ -45,6 +45,24 @@ final class CorrectionLearnerTests: XCTestCase {
         XCTAssertEqual(CorrectionLearner.detect(pasted: pasted, current: "Merhaba dünya"), [])
     }
 
+    func testRewritesThatDoNotSoundAlikeAreNotLearned() {
+        // Günlükten: cümle birleştirme ve kelime değiştirme, duyma hatası değil.
+        XCTAssertEqual(CorrectionLearner.detect(pasted: "Ve onun menzili ne kadardır?",
+                                                current: "hangisidir?Ve onun menzili ne kadardır?"), [])
+        XCTAssertEqual(CorrectionLearner.detect(pasted: "Eğer böyle bir şey işlediysen bu olmaması gerekiyor.",
+                                                current: "Eğer böyle bir şey yaptıysan bu olmaması gerekiyor."), [])
+        XCTAssertFalse(CorrectionLearner.isPlausible(wrong: "Ve", right: "hangisidir?Ve"))
+        XCTAssertFalse(CorrectionLearner.isPlausible(wrong: "işlediysen", right: "yaptıysan"))
+        // Gerçek duyma hataları öğrenilmeye devam eder.
+        XCTAssertTrue(CorrectionLearner.isPlausible(wrong: "Giral", right: "geri al"))
+        XCTAssertTrue(CorrectionLearner.isPlausible(wrong: "el eleme", right: "LLM"))
+        XCTAssertTrue(CorrectionLearner.isPlausible(wrong: "ÇEKİŞ ARET'i", right: "check işareti"))
+        XCTAssertTrue(CorrectionLearner.isPlausible(wrong: "modeli", right: "model Y"))
+        XCTAssertTrue(CorrectionLearner.isPlausible(wrong: "çalışırsan", right: "çalışırken"))
+        XCTAssertEqual(pairs(CorrectionLearner.detect(pasted: "Sonra da teksti el eleme gönderdiğinde bakarız.",
+                                                      current: "Sonra da teksti LLM'e gönderdiğinde bakarız.")), ["el eleme→LLM'e"])
+    }
+
     func testDiffOpcodes() {
         let ops = CorrectionLearner.diff(["a", "b", "c", "d"], ["a", "x", "c", "d", "e"])
         XCTAssertEqual(ops.map(\.kind), [.equal, .replace, .equal, .insert])

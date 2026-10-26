@@ -63,6 +63,7 @@ enum CorrectionLearner {
             guard !wrong.isEmpty, !right.isEmpty, right.contains(where: \.isLetter) else { continue }
             // Yalnızca büyük/küçük harf farkı öğrenilecek bir şey değil.
             guard wrong.lowercased() != right.lowercased() else { continue }
+            guard isPlausible(wrong: wrong, right: right) else { continue }
             corrections.append(LearnedCorrection(
                 wrong: wrong,
                 right: right,
@@ -73,6 +74,47 @@ enum CorrectionLearner {
             if corrections.count >= maximumCorrections { break }
         }
         return corrections
+    }
+
+    /// Bir yazım düzeltmesi mi, yoksa cümlenin değiştirilmesi mi?
+    ///
+    /// Günlükte görüldü: "Ve" → "hangisidir?Ve" (iki cümle birleştirilmiş),
+    /// "işlediysen" → "yaptıysan" (başka bir kelime seçilmiş). Bunlar
+    /// Whisper'ın duyma hatası değil, kullanıcının cümleyi değiştirmesi;
+    /// terim olarak prompt'a, örnek olarak dil modeline gitmeleri yalnızca
+    /// zarar verir. Yazım düzeltmesi ise duyulana benzer: noktalama taşımaz,
+    /// iki harflik bir bağlacı hedef almaz ve iki biçim birbirine yakındır —
+    /// aynı sesle başlar ("Giral" → "geri al"), harflerinin yarısından azı
+    /// değişir, ya da hedef bir kısaltmadır ve harfleri kaynakta sırayla
+    /// duyulur ("el eleme" → "LLM").
+    static func isPlausible(wrong: String, right: String) -> Bool {
+        if right.contains(where: { ".?!;:".contains($0) }) { return false }
+        guard wrong.filter(\.isLetter).count >= 3 else { return false }
+        let source = Array(LearnedCorrection.key(wrong).filter(\.isLetter))
+        let target = Array(LearnedCorrection.key(right).filter(\.isLetter))
+        guard let first = source.first, let second = target.first else { return false }
+        if first == second { return true }
+        let letters = right.filter(\.isLetter)
+        if letters.count <= 4, letters == letters.uppercased(), isSubsequence(target, of: source) { return true }
+        return Double(levenshtein(source, target)) < 0.5 * Double(max(source.count, target.count))
+    }
+
+    private static func isSubsequence(_ needle: [Character], of haystack: [Character]) -> Bool {
+        var index = 0
+        for character in haystack where index < needle.count && character == needle[index] { index += 1 }
+        return index == needle.count
+    }
+
+    private static func levenshtein(_ source: [Character], _ target: [Character]) -> Int {
+        var previous = Array(0...target.count)
+        for i in 1...source.count {
+            var current = [i]
+            for j in 1...target.count {
+                current.append(min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + (source[i - 1] == target[j - 1] ? 0 : 1)))
+            }
+            previous = current
+        }
+        return previous[target.count]
     }
 
     // MARK: - Kelimeler

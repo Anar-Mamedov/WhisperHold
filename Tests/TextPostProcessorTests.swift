@@ -19,6 +19,15 @@ final class TextPostProcessorTests: XCTestCase {
         )
     }
 
+    func testTurkishSpellingFixes() {
+        var turkish = TextPostProcessor()
+        turkish.turkishSpelling = true
+        XCTAssertEqual(turkish.process("Yada bunlar dışında herşey yolunda, bir kaç şey kaldı."),
+                       "Ya da bunlar dışında her şey yolunda, birkaç şey kaldı.")
+        XCTAssertEqual(turkish.process("Yadayım demedi, orjinal değil."), "Yadayım demedi, orijinal değil.")
+        XCTAssertEqual(processor.process("Yada bunlar."), "Yada bunlar.")
+    }
+
     func testRealThanksAreKept() {
         XCTAssertEqual(processor.process("Gerçekten çok teşekkür ederim Erkan abi."), "Gerçekten çok teşekkür ederim Erkan abi.")
     }

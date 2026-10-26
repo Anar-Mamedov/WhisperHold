@@ -86,3 +86,15 @@ class SwallowedWindowTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SecondListeningTests(unittest.TestCase):
+    def test_word_differences_are_short_replacements_only(self) -> None:
+        primary = "Erhan Bey, bu ekranda stoneları sıfırla derseniz orası düzelir, bozulmuş yani."
+        alternate = "Erhan Bey, bu ekranda sütunları sıfırla derseniz orası düzelir bozulmuş yani."
+        self.assertEqual(whisper_worker.word_differences(primary, alternate), [{"wrong": "stoneları", "right": "sütunları"}])
+        # Case and punctuation alone are not a disagreement; long rewrites are ignored.
+        self.assertEqual(whisper_worker.word_differences("Tamam, Reis.", "tamam reis"), [])
+        self.assertEqual(whisper_worker.word_differences("a b c d e f", "x y z w v u"), [])
+        self.assertEqual(whisper_worker.word_differences("pul rikuest açtım", "pull request açtım"),
+                         [{"wrong": "pul rikuest", "right": "pull request"}])

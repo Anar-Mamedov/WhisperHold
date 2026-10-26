@@ -79,6 +79,8 @@ final class PythonWhisperEngine {
     var onSmartCorrectionState: ((String, String) -> Void)?
     /// Hafıza durumu: dikte/düzeltme sayıları ve embedding modelinin hâli.
     var onMemoryState: (([String: Any]) -> Void)?
+    /// Derin düzeltme modelinin durumu (indiriliyor / yükleniyor / hazır / kapalı).
+    var onDeepState: ((String, String) -> Void)?
     private(set) var state: LoadState = .idle {
         didSet { onStateChange?(state) }
     }
@@ -204,9 +206,17 @@ final class PythonWhisperEngine {
         var biasTerms: [String]?
     }
 
+    /// Bir çeviri: metin ve ikinci dinleyişin farklı duyduğu kelimeler.
+    /// Alternatifler akıllı düzeltmeye ipucu olarak gider, kendiliğinden
+    /// uygulanmaz.
+    struct Transcript {
+        var text: String
+        var alternates: [(wrong: String, right: String)] = []
+    }
+
     func transcribe(
         samples: [Float], language: String, vocabulary: Vocabulary = Vocabulary()
-    ) async throws -> String {
+    ) async throws -> Transcript {
         guard isReady else { throw EngineError.notReady }
 
         let requestID = UUID().uuidString
@@ -216,7 +226,7 @@ final class PythonWhisperEngine {
         try audioData.write(to: audioURL, options: .atomic)
         defer { try? FileManager.default.removeItem(at: audioURL) }
 
-        return try await withCheckedThrowingContinuation { continuation in
+        let raw: String = try await withCheckedThrowingContinuation { continuation in
             pending[requestID] = continuation
             watchdogs[requestID] = Task { [weak self] in
                 try? await Task.sleep(for: Self.timeout(forSampleCount: samples.count))
@@ -246,6 +256,15 @@ final class PythonWhisperEngine {
                 continuation.resume(throwing: error)
             }
         }
+        // `result` olayı metni ve alternatifleri tek JSON metni olarak sürdürür.
+        guard let data = raw.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return Transcript(text: raw) }
+        let alternates = ((object["alternates"] as? [[String: Any]]) ?? []).compactMap { pair -> (wrong: String, right: String)? in
+            guard let wrong = pair["wrong"] as? String, let right = pair["right"] as? String, !wrong.isEmpty, !right.isEmpty else { return nil }
+            return (wrong, right)
+        }
+        return Transcript(text: object["text"] as? String ?? "", alternates: alternates)
     }
 
     /// Hafızaya yazılacak komutlar worker kapalıyken (boşta boşaltıldığında)
@@ -304,7 +323,7 @@ final class PythonWhisperEngine {
     }
 
     func suggestCorrections(
-        for text: String, terms: [String], examples: [Example] = []
+        for text: String, terms: [String], examples: [Example] = [], alternates: [(wrong: String, right: String)] = []
     ) async throws -> [(wrong: String, right: String)] {
         guard isReady, !text.isEmpty else { return [] }
         let requestID = UUID().uuidString
@@ -324,17 +343,54 @@ final class PythonWhisperEngine {
                     "text": text,
                     "terms": terms,
                     "examples": examples.map { ["text": $0.text, "wrong": $0.wrong, "right": $0.right] },
+                    "alternates": alternates.map { ["wrong": $0.wrong, "right": $0.right] },
                 ])
             } catch {
                 takePending(requestID)
                 continuation.resume(throwing: error)
             }
         }
+        return Self.pairs(from: raw)
+    }
+
+    /// Menüden "bir daha bak": büyük model yalnız bu istek için yüklenir, metne
+    /// bakar, boşaltılır. İlk kullanımda ağırlıkları iner (~15 GB), o yüzden
+    /// gözcü süresi uzun; worker bu arada dikteye cevap vermeye devam eder.
+    func deepCorrections(
+        for text: String, terms: [String], examples: [Example] = []
+    ) async throws -> [(wrong: String, right: String)] {
+        guard isReady, !text.isEmpty else { return [] }
+        let requestID = UUID().uuidString
+        let raw: String = try await withCheckedThrowingContinuation { continuation in
+            pending[requestID] = continuation
+            watchdogs[requestID] = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(45 * 60))
+                guard !Task.isCancelled, let self, let waiting = self.takePending(requestID) else { return }
+                waiting.resume(returning: "[]")
+            }
+            do {
+                try send([
+                    "id": requestID,
+                    "command": "deep_suggest",
+                    "text": text,
+                    "terms": terms,
+                    "examples": examples.map { ["text": $0.text, "wrong": $0.wrong, "right": $0.right] },
+                ])
+            } catch {
+                takePending(requestID)
+                continuation.resume(throwing: error)
+            }
+        }
+        return Self.pairs(from: raw)
+    }
+
+    private static func pairs(from raw: String) -> [(wrong: String, right: String)] {
         guard let data = raw.data(using: .utf8),
-              let pairs = try? JSONSerialization.jsonObject(with: data) as? [[String: String]]
+              let pairs = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
         else { return [] }
         return pairs.compactMap { pair in
-            guard let wrong = pair["wrong"], let right = pair["right"], !wrong.isEmpty, !right.isEmpty else { return nil }
+            guard let wrong = pair["wrong"] as? String, let right = pair["right"] as? String,
+                  !wrong.isEmpty, !right.isEmpty else { return nil }
             return (wrong, right)
         }
     }
@@ -499,7 +555,7 @@ final class PythonWhisperEngine {
 
     private func handle(_ message: [String: Any]) {
         guard let event = message["event"] as? String else { return }
-        if event != "result" && event != "suggestions" {
+        if event != "result" && event != "suggestions" && event != "deep_suggestions" {
             AppLog.write("worker event: \(event) \(message["state"] as? String ?? "") \(message["detail"] as? String ?? "")")
         }
         switch event {
@@ -524,12 +580,18 @@ final class PythonWhisperEngine {
         case "result":
             // Devamlılığı aldıktan sonra mutlaka sürdürülmeli: metin alanı
             // beklenmedik biçimde boş gelirse isteği askıda bırakmayalım.
+            // Metin ve alternatifler tek JSON metni olarak sürdürülür; `transcribe` çözer.
             guard let id = message["id"] as? String,
                   let continuation = takePending(id)
             else { return }
-            continuation.resume(returning: message["text"] as? String ?? "")
+            let payload: [String: Any] = [
+                "text": message["text"] as? String ?? "",
+                "alternates": message["alternates"] as? [[String: Any]] ?? [],
+            ]
+            let data = (try? JSONSerialization.data(withJSONObject: payload)) ?? Data("{}".utf8)
+            continuation.resume(returning: String(decoding: data, as: UTF8.self))
 
-        case "suggestions":
+        case "suggestions", "deep_suggestions":
             // Öneri listesi JSON metni olarak sürdürülür; `suggestCorrections`
             // çözer. Böylece bekleyen istek tablosu tek tipte kalıyor.
             guard let id = message["id"] as? String,
@@ -542,6 +604,11 @@ final class PythonWhisperEngine {
         case "llm_state":
             if let state = message["state"] as? String {
                 onSmartCorrectionState?(state, message["detail"] as? String ?? "")
+            }
+
+        case "deep_state":
+            if let state = message["state"] as? String {
+                onDeepState?(state, message["detail"] as? String ?? "")
             }
 
         case "memory_state":

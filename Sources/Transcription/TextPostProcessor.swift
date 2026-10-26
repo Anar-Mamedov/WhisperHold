@@ -22,6 +22,19 @@ struct TextPostProcessor {
     /// Bkz. `SpellingGuard`.
     var isKnownWord: ((String) -> Bool)?
 
+    /// Türkçe dikte: `turkishSpellingFixes` uygulanır.
+    var turkishSpelling = false
+
+    /// Whisper'ın Türkçede sık yaptığı, hiçbir cümlede doğru olmayan bitişik
+    /// ve ayrı yazımlar. Arşivde "Yada bunlar dışında…" diye çıktı; "yada"
+    /// Türkçede bir kelime değil, "ya da" olmalı. Yalnızca bağlamdan bağımsız
+    /// kesin olanlar listelenir; büyük harfle başlıyorsa öyle kalır.
+    static let turkishSpellingFixes: [(wrong: String, right: String)] = [
+        ("yada", "ya da"), ("herşey", "her şey"), ("birşey", "bir şey"), ("hiçbirşey", "hiçbir şey"),
+        ("bir kaç", "birkaç"), ("bir çok", "birçok"), ("yanlız", "yalnız"), ("yalnış", "yanlış"),
+        ("herkez", "herkes"), ("orjinal", "orijinal"), ("tabiki", "tabii ki"),
+    ]
+
     /// Tamamı bu ifadelerden biriyse çıktı tamamen atılır.
     /// Kısmi eşleşmeye bakmıyoruz — "teşekkürler" gerçek bir dikte olabilir.
     private static let hallucinations: Set<String> = {
@@ -93,6 +106,7 @@ struct TextPostProcessor {
 
         text = Self.trimmingTrailingLoop(text)
         text = Self.collapsingRepeatedPhrases(text)
+        if turkishSpelling { text = Self.applyingTurkishSpelling(to: text) }
         text = applyReplacements(to: text)
         text = text.replacingOccurrences(
             of: "\\s+", with: " ", options: .regularExpression
@@ -305,6 +319,20 @@ struct TextPostProcessor {
             }
         }
         return false
+    }
+
+    static func applyingTurkishSpelling(to text: String) -> String {
+        var result = text
+        for (wrong, right) in turkishSpellingFixes {
+            let pattern = "(?<!\\p{L})" + NSRegularExpression.escapedPattern(for: wrong) + "(?!\\p{L})"
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { continue }
+            for match in regex.matches(in: result, range: NSRange(result.startIndex..., in: result)).reversed() {
+                guard let range = Range(match.range, in: result) else { continue }
+                let capitalized = result[range].first?.isUppercase == true
+                result.replaceSubrange(range, with: capitalized ? right.prefix(1).uppercased() + right.dropFirst() : right)
+            }
+        }
+        return result
     }
 
     private func applyReplacements(to text: String) -> String {

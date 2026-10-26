@@ -39,14 +39,20 @@ fi
 "$venv_path/bin/python3" -m pip install --disable-pip-version-check --upgrade pip setuptools wheel
 "$venv_path/bin/python3" -m pip install --disable-pip-version-check -r "$requirements_file"
 
-# Hafızanın embedding modeli (EmbeddingGemma, GGUF) llama.cpp ile çalışır.
-# Paket kaynaktan derlenir ve her makinede derlenemeyebilir; başarısız olursa
-# hafıza, transformers ile çalışan yedek embedding modeline düşer.
+# İsteğe bağlı paketler, her biri kendi başına: llama.cpp (hafızanın
+# EmbeddingGemma modeli; kaynaktan derlenir, her makinede derlenemeyebilir),
+# mlx-lm (akıllı düzeltme modeli) ve PyObjC (macOS yazım sözlüğü). Biri
+# kurulamazsa diğerleri yine kurulur; her birinin kodda bir yedeği var.
 optional_file="$(dirname "$requirements_file")/requirements-optional.txt"
 if [[ -f "$optional_file" ]]; then
-  print "İsteğe bağlı paketler kuruluyor (llama.cpp)…"
-  "$venv_path/bin/python3" -m pip install --disable-pip-version-check -r "$optional_file" \
-    || print "İsteğe bağlı paketler kurulamadı; hafıza yedek embedding modelini kullanacak."
+  while IFS= read -r line; do
+    line="${line%%#*}"
+    line="${line//[[:space:]]/}"
+    [[ -z "$line" ]] && continue
+    print "İsteğe bağlı paket kuruluyor: $line…"
+    "$venv_path/bin/python3" -m pip install --disable-pip-version-check "$line" \
+      || print "$line kurulamadı; uygulama bu özellik için yedek yolu kullanacak."
+  done < "$optional_file"
 fi
 
 print "Python motoru hazır."

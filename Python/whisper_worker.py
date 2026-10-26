@@ -12,12 +12,14 @@ import json
 import hashlib
 import os
 import sys
+import threading
 import traceback
 from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gpu_lock  # noqa: E402  (sits next to this file in the app bundle)
+import acronyms  # noqa: E402
 import term_bias  # noqa: E402
 import term_llm  # noqa: E402
 import memory as memory_store  # noqa: E402
@@ -449,7 +451,7 @@ def build_prompt(request: dict[str, Any], processor: Any, runtime: dict[str, Any
 
 def transcribe(
     request: dict[str, Any], np: Any, torch: Any, processor: Any, runtime: dict[str, Any]
-) -> str:
+) -> tuple[str, list[dict[str, str]]]:
     audio_path = Path(str(request["audio_path"]))
     audio = np.fromfile(audio_path, dtype=np.float32)
     if audio.size == 0:
@@ -492,7 +494,88 @@ def transcribe(
             if swallowed_window(retry_segments, processor) is None:
                 text = retry_text
 
-    return text
+    # "el eleme" → "LLM'e": letter names the model wrote for a spelled acronym.
+    text = acronyms.restore(text, bias_terms)
+    return text, second_listening(audio, text, generate_kwargs, torch, processor, runtime, bias_terms)
+
+
+SECOND_LISTENING_BEAMS = 5
+MAX_ALTERNATE_WORDS = 3
+
+
+def second_listening(
+    audio: Any, text: str, generate_kwargs: dict[str, Any], torch: Any, processor: Any,
+    runtime: dict[str, Any], bias_terms: list[str]
+) -> list[dict[str, str]]:
+    """Decode the clip once more, with beam search, and return the words the two
+    decodings disagree on.
+
+    A word the model misheard is often heard right on a second pass: on 16
+    clips with known text, every alternative decoding tried (no prompt, beam
+    search, sampling) had "sütunları" where the greedy pass wrote "stoneları".
+    Beam search was the cleanest second opinion — it disagreed with the first
+    pass in only two places, one of them that error — so it is the one run
+    here, with the same prompt and biasing. The disagreements go to the
+    correction model as hints; nothing is replaced on this evidence alone.
+    Single-window audio only: beam search on long recordings was measured as
+    slower and less faithful.
+    """
+    if audio.size > LONG_FORM_SECONDS * SAMPLE_RATE:
+        return []
+    beam_kwargs = {**generate_kwargs, "num_beams": SECOND_LISTENING_BEAMS}
+    try:
+        alternate, _ = decode(audio, beam_kwargs, torch, processor, runtime, bias_terms)
+    except Exception as error:  # noqa: BLE001 - a hint, never a failure
+        print(f"ikinci dinleyiş yapılamadı: {error}", file=sys.stderr, flush=True)
+        return []
+    alternate = acronyms.restore(alternate, bias_terms)
+    pairs = word_differences(text, alternate)
+    if pairs:
+        print("ikinci dinleyiş farklı duydu: " + ", ".join(f"{p['wrong']} → {p['right']}" for p in pairs), file=sys.stderr, flush=True)
+    return pairs
+
+
+def word_differences(primary: str, alternate: str) -> list[dict[str, str]]:
+    """Short spans (up to three words) where the alternate text differs from the primary."""
+    import difflib
+
+    strip = lambda word: word.strip(".,;:!?\"()[]…")  # noqa: E731
+    a, b = primary.split(), alternate.split()
+    key = lambda words: [strip(w).lower() for w in words]  # noqa: E731
+    pairs: list[dict[str, str]] = []
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(a=key(a), b=key(b), autojunk=False).get_opcodes():
+        if tag != "replace" or i2 - i1 > MAX_ALTERNATE_WORDS or j2 - j1 > MAX_ALTERNATE_WORDS:
+            continue
+        wrong = " ".join(strip(w) for w in a[i1:i2]).strip()
+        right = " ".join(strip(w) for w in b[j1:j2]).strip()
+        if wrong and right and wrong.lower() != right.lower():
+            pairs.append({"wrong": wrong, "right": right})
+    return pairs
+
+
+def deep_suggest(request: dict[str, Any], request_id: str, deep: Any, store: Any, runtime: dict[str, Any]) -> None:
+    """Load the deep model, ask it about one text, unload it, report."""
+    try:
+        terms = [str(term) for term in request.get("terms") or [] if str(term).strip()]
+        vocabulary = terms + [term for term in runtime["vocabulary"] if term not in set(terms)]
+        text = str(request.get("text") or "")
+        examples = [example for example in request.get("examples") or [] if isinstance(example, dict)]
+        if store is not None:
+            seen = {(str(e.get("wrong")), str(e.get("right"))) for e in examples}
+            examples += [e for e in store.nearest_corrections(text) if (e["wrong"], e["right"]) not in seen]
+        deep.start()
+        if deep.thread is not None:
+            deep.thread.join()
+        if deep.model is None:
+            emit({"event": "deep_suggestions", "id": request_id, "replacements": [], "state": deep.state, "detail": deep.detail})
+            return
+        learned = store.learned_pairs() if store is not None else []
+        replacements, state = deep.suggest(text, vocabulary, examples, learned)
+        emit({"event": "deep_suggestions", "id": request_id, "replacements": replacements, "state": state})
+    except Exception as error:  # noqa: BLE001 - reported, never fatal
+        emit({"event": "deep_suggestions", "id": request_id, "replacements": [], "state": "failed", "detail": str(error)})
+    finally:
+        deep.unload()
 
 
 def main() -> int:
@@ -510,6 +593,7 @@ def main() -> int:
     })
 
     smart = term_llm.SmartCorrector(emit)
+    smart_deep = term_llm.SmartCorrector(emit, model_ids=[term_llm.DEEP_MODEL_ID], event="deep_state")
     support_root = Path(os.environ.get("HF_HOME") or (Path.home() / "Library/Application Support/WhisperHold/HuggingFace")).parent
     try:
         store: memory_store.Memory | None = memory_store.Memory(support_root / "memory.sqlite", emit)
@@ -525,8 +609,8 @@ def main() -> int:
             command = request.get("command")
             if command == "transcribe":
                 emit({"event": "transcribing", "id": request_id})
-                text = transcribe(request, np, torch, processor, runtime)
-                emit({"event": "result", "id": request_id, "text": text})
+                text, alternates = transcribe(request, np, torch, processor, runtime)
+                emit({"event": "result", "id": request_id, "text": text, "alternates": alternates})
             elif command == "load_llm":
                 # Akıllı düzeltme açıkken uygulama bunu worker her başladığında
                 # gönderir; model arka planda yüklenir, diktenin önünü kesmez.
@@ -542,8 +626,20 @@ def main() -> int:
                     for example in store.nearest_corrections(text):
                         if (example["wrong"], example["right"]) not in seen:
                             examples.append(example)
-                replacements, state = smart.suggest(text, vocabulary, examples)
+                learned = store.learned_pairs() if store is not None else []
+                alternates = [a for a in request.get("alternates") or [] if isinstance(a, dict)]
+                replacements, state = smart.suggest(text, vocabulary, examples, learned, alternates)
                 emit({"event": "suggestions", "id": request_id, "replacements": replacements, "state": state})
+            elif command == "deep_suggest":
+                # The menu's "look again": the bigger model, loaded for this one
+                # request on a thread of its own so dictation keeps working,
+                # then dropped. Its first use downloads the weights.
+                threading.Thread(
+                    target=deep_suggest,
+                    args=(request, request_id, smart_deep, store, runtime),
+                    name="deep-suggest",
+                    daemon=True,
+                ).start()
             elif command == "load_memory":
                 if store is not None:
                     store.start_embedder()

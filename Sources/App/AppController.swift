@@ -38,6 +38,8 @@ final class AppController: ObservableObject {
 
     @Published private(set) var status: Status = .needsPermissions
     @Published private(set) var lastTranscript = ""
+    /// Menüden istenen derin düzeltme sürüyor (büyük model yükleniyor ya da bakıyor).
+    @Published private(set) var isDeepCorrecting = false
     @Published private(set) var lastNotice: String?
 
     /// Arşivdeki kayıtlar, en yeniden eskiye. `refreshRecordings()` tazeler.
@@ -105,6 +107,10 @@ final class AppController: ObservableObject {
             self.memoryStatus = "\(dictations) dikte · \(corrections) düzeltme · \(embedderText)"
         }
         engine.restorePendingMemoryCommands(preferences.pendingMemoryCommands)
+        engine.onDeepState = { [weak self] state, detail in
+            guard let self, self.isDeepCorrecting, !detail.isEmpty else { return }
+            if state == "downloading" || state == "loading" { self.lastNotice = detail }
+        }
         engine.onSmartCorrectionState = { [weak self] state, detail in
             guard let self else { return }
             AppLog.write("akıllı düzeltme durumu: \(state) \(detail)")
@@ -392,8 +398,9 @@ final class AppController: ObservableObject {
             learned: preferences.learnedTerms,
             useBuiltIn: preferences.useBuiltInVocabulary
         )
-        let raw = try await transcribeRecovering(samples, vocabulary: vocabulary)
-        if let text = await polish(raw, smart: true) { return (raw, text) }
+        let transcript = try await transcribeRecovering(samples, vocabulary: vocabulary)
+        let raw = transcript.text
+        if let text = await polish(raw, smart: true, alternates: transcript.alternates) { return (raw, text) }
         guard !preferences.contextSentences.isEmpty || !preferences.allTerms.isEmpty else { return (raw, nil) }
 
         AppLog.write("ilk sonuç atıldı, prompt'suz yeniden deneniyor")
@@ -404,7 +411,7 @@ final class AppController: ObservableObject {
         bare.terms = []
         bare.learned = []
         let retry = try await transcribeRecovering(samples, vocabulary: bare)
-        return (retry, await polish(retry, smart: true))
+        return (retry.text, await polish(retry.text, smart: true, alternates: retry.alternates))
     }
 
     /// Worker süreci çevirinin ortasında ölürse dikte kaybolmasın: worker bir
@@ -416,7 +423,7 @@ final class AppController: ObservableObject {
     /// ileride başka bir nedenle çökerse diktenin yine de teslim edilmesi için.
     private func transcribeRecovering(
         _ samples: [Float], vocabulary: PythonWhisperEngine.Vocabulary
-    ) async throws -> String {
+    ) async throws -> PythonWhisperEngine.Transcript {
         do {
             return try await engine.transcribe(samples: samples, language: preferences.language, vocabulary: vocabulary)
         } catch PythonWhisperEngine.EngineError.workerExited(let status) {
@@ -429,7 +436,9 @@ final class AppController: ObservableObject {
     /// Ham metni önce (açıksa) yerel dil modelinin terim önerilerinden,
     /// sonra sözlük düzelticisinden geçirir. Öneriler worker'da sözlükle
     /// doğrulanmış gelir; burada yalnızca kelime sınırında birebir uygulanır.
-    private func polish(_ raw: String, smart: Bool) async -> String? {
+    private func polish(
+        _ raw: String, smart: Bool, alternates: [(wrong: String, right: String)] = []
+    ) async -> String? {
         var text = raw
         if smart, preferences.smartCorrection {
             // Örnekler hafızadan gelir (bu metne en benzeyen düzeltmeler);
@@ -438,7 +447,7 @@ final class AppController: ObservableObject {
                 PythonWhisperEngine.Example(text: $0.context, wrong: $0.wrong, right: $0.right)
             }
             let suggestions = (try? await engine.suggestCorrections(
-                for: raw, terms: preferences.allTerms, examples: Array(examples)
+                for: raw, terms: preferences.allTerms, examples: Array(examples), alternates: alternates
             )) ?? []
             for (wrong, right) in suggestions {
                 let pattern = "(?<!\\w)" + NSRegularExpression.escapedPattern(for: wrong) + "(?!\\w)"
@@ -540,6 +549,7 @@ final class AppController: ObservableObject {
         processor.builtInTerms = preferences.useBuiltInVocabulary ? BuiltInVocabulary.terms : []
         processor.replacements = preferences.effectiveReplacements
         processor.isKnownWord = SpellingGuard.knownWordCheck(dictationLanguage: preferences.language)
+        processor.turkishSpelling = preferences.language == "tr" || preferences.language == "auto"
         return processor.process(raw)
     }
 
@@ -624,6 +634,56 @@ final class AppController: ObservableObject {
             return
         }
         retranscribe(latest)
+    }
+
+    /// Menüden "Derin düzelt": son çeviriye büyük modelle bir daha bakar.
+    /// Büyük model yalnız bu iş için yüklenir ve sonra boşaltılır; ilk
+    /// kullanımda ağırlıkları iner. Sonuç panoya kopyalanır, yapıştırılmaz:
+    /// kullanıcı metnin nereye gittiğini seçsin.
+    func deepCorrectLastTranscript() {
+        let text = lastTranscript
+        guard !text.isEmpty, !isDeepCorrecting else { return }
+        isDeepCorrecting = true
+        cancelIdleModelUnload()
+        lastNotice = "Büyük model hazırlanıyor… (ilk kullanımda ~15 GB iner)"
+        Task { [weak self] in
+            guard let self else { return }
+            defer {
+                self.isDeepCorrecting = false
+                self.scheduleIdleModelUnload()
+            }
+            do {
+                try await self.ensureModelReady()
+                let examples = self.preferences.learnedCorrections.prefix(4).map {
+                    PythonWhisperEngine.Example(text: $0.context, wrong: $0.wrong, right: $0.right)
+                }
+                let pairs = try await self.engine.deepCorrections(
+                    for: text, terms: self.preferences.allTerms, examples: Array(examples)
+                )
+                guard !pairs.isEmpty else {
+                    self.lastNotice = "Büyük model değişiklik önermedi."
+                    AppLog.write("derin düzeltme: öneri yok")
+                    return
+                }
+                var corrected = text
+                for (wrong, right) in pairs {
+                    let pattern = "(?<!\\w)" + NSRegularExpression.escapedPattern(for: wrong) + "(?!\\w)"
+                    corrected = corrected.replacingOccurrences(
+                        of: pattern,
+                        with: NSRegularExpression.escapedTemplate(for: right),
+                        options: [.regularExpression, .caseInsensitive]
+                    )
+                }
+                let polished = self.polish(corrected) ?? corrected
+                self.lastTranscript = polished
+                self.copyToPasteboard(polished)
+                let summary = pairs.map { "\($0.wrong)→\($0.right)" }.joined(separator: ", ")
+                self.lastNotice = "Derin düzeltme panoya kopyalandı — \(summary)"
+                AppLog.write("derin düzeltme uygulandı — \(summary)")
+            } catch {
+                self.lastNotice = error.localizedDescription
+            }
+        }
     }
 
     func copyLastTranscript() {

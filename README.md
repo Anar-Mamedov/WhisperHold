@@ -37,32 +37,58 @@ is needed.
   biasing), which is what turns a misheard `bekleyen` back into `backendci`;
   afterwards the same list drives the fuzzy correction. Your list always
   wins over the built-in one.
+- **Spelled-out acronyms and Turkish spelling.** Say "LLM'e" and Whisper
+  writes the letter names it heard: `el eleme`. The worker turns a run of
+  words that spells an acronym from your list or the built-in vocabulary
+  back into the acronym, suffix included (`el eleme` → `LLM'e`, `ey pi ay` →
+  `API`); on 217 stored texts it changed only the two that needed it. A short
+  table of spellings that are wrong in every Turkish sentence (`yada` → `ya
+  da`, `herşey` → `her şey`) is applied after that.
 - **Learns from your corrections.** After a dictation is pasted, the app
   watches that text field through the Accessibility API. Fix a word and
   press Enter (or just pause) and the corrected spelling is added to your
   vocabulary on its own, like Wispr Flow's auto-learned dictionary — so the
   prompt, the biasing, the corrector and smart correction all know it next
   time. If the word the app wrote was itself a real Turkish word, it is not
-  turned into a blind replacement: you may really mean it next time.
+  turned into a blind replacement: you may really mean it next time. Edits
+  that are not hearing errors — two sentences joined, a different word
+  chosen — are not learned at all: a correction has to sound like what it
+  replaces.
 - **Local memory with semantic search.** Your context sentences, your term
   list, learned corrections and dictations are kept in a SQLite database
   next to the models, indexed with SQLite's full-text search and with
   sentence embeddings from EmbeddingGemma 300M — the same quantized GGUF
-  OpenClaw's memory search uses, run with llama.cpp on Metal (fallback:
-  multilingual-e5-small through PyTorch). Whisper's prompt only holds about
+  OpenClaw's memory search uses, run with llama.cpp on the CPU (9 ms a
+  sentence; fallback: multilingual-e5-small through PyTorch). Whisper's prompt only holds about
   223 tokens, so the lists can be as long as you like: for *each* dictation
   the memory picks the context sentence and the terms that fit — the ones
   you use most, most recently, and in contexts closest to what you were just
   dictating. Smart correction gets your past corrections whose sentences are
   most similar to the new transcript, scored like OpenClaw does (vector
   similarity 0.7, keyword rank 0.3). Nothing leaves the machine.
-- **Smart correction (optional).** A local language model (Qwen3-4B-Instruct,
-  Apache-2.0, downloaded once) reads the finished sentence and proposes
-  replacements for software terms the recognizer turned into similar-sounding
-  Turkish words. Only proposals that occur verbatim, sound alike and resolve
-  to a vocabulary term (with a Turkish suffix at most) are applied, so the
-  model cannot rewrite anything else. Off by default; it adds about a second
-  per dictation.
+- **A second listening.** Every clip under 30 s is decoded twice, the
+  second time with beam search; the words the two passes disagree on go to
+  smart correction as hints ("a second decoding heard *stoneları* as
+  *sütunları*"). Measured on 16 clips with known text: every alternative
+  decoding tried heard that word right where the first pass had it wrong,
+  and beam search disagreed with the first pass in only two places. Nothing
+  is replaced on this evidence alone; it costs about two seconds.
+- **Smart correction (optional).** A local language model (Gemma 4 12B,
+  4-bit, run with Apple's MLX; downloaded once) reads the finished sentence
+  and names the words the recognizer got wrong: a software term written as
+  a Turkish word, a non-word, or a real word that does not fit its sentence
+  (`çalışırsan` for `çalışırken`). It answers with word pairs, never with a
+  rewritten sentence, and a pair is applied only if the word occurs verbatim,
+  the replacement sounds like it (same first sound, at most a third of the
+  letters changed) and is a dictionary word or a vocabulary term — or if you
+  taught exactly that pair. Measured on the user's own hearing errors it
+  removed more than a third of them and changed none of 51 correct
+  dictations; with the user's past corrections as examples it also carries a
+  taught fix over to new sentences. Off by default; it adds about four
+  seconds per dictation. **Derin düzelt** in the menu asks a bigger model
+  (Gemma 4 26B-A4B, loaded for that one request and dropped again; its
+  first use downloads ~15 GB) to look at the last transcript once more and
+  copies the result to the clipboard.
 - **Hallucination and loop guards.** Known subtitle artifacts ("Thanks for
   watching", "Altyazı M.K.") are dropped instead of pasted — as a whole clip
   or as a stray sentence inside a longer dictation — runaway repetition is
@@ -86,7 +112,8 @@ is needed.
 - Python 3 — 3.11 is preferred: `brew install python@3.11`
 - About 4.5 GB of free disk space: ~0.9 GB for the Python environment,
   ~2.9 GB for Whisper and ~0.3–0.5 GB for the memory's embedding model;
-  another 8 GB if you turn on smart correction
+  another 11 GB if you turn on smart correction (Gemma 4 12B through MLX;
+  the Transformers fallback model is 8 GB)
 - [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`),
   only if you change `project.yml`
 
@@ -125,7 +152,18 @@ fallback heuristic) have unit tests too; they run with the app's own
 environment:
 
 ```sh
-cd Python && ~/Library/Application\ Support/WhisperHold/runtime/.venv/bin/python3 -m unittest test_whisper_worker test_term_bias test_term_llm test_memory
+cd Python && ~/Library/Application\ Support/WhisperHold/runtime/.venv/bin/python3 -m unittest test_whisper_worker test_term_bias test_term_llm test_memory test_acronyms test_dictionary test_gpu_lock test_benchmark
+```
+
+The correction layers are measured, not argued about. `Python/benchmark.py`
+turns the memory into a test set — every correction you taught (the
+sentence as Whisper wrote it, the word you meant) plus the dictations you
+left alone — and runs the worker's text pipeline over it, reporting word
+errors fixed against correct sentences damaged. Run it after changing a
+model, a prompt or the gate:
+
+```sh
+cd Python && ~/Library/Application\ Support/WhisperHold/runtime/.venv/bin/python3 benchmark.py
 ```
 
 ### Code signing
@@ -215,15 +253,34 @@ Labels in the app are in Turkish; the English names are given alongside.
   turns a real Turkish word into its English spelling (`buton` stays `buton`
   unless *you* list `button`).
 - **Smart correction** — off by default. Turning it on downloads
-  Qwen3-4B-Instruct-2507 (~8 GB) into the app's model cache and loads it next
-  to Whisper. After each dictation the model is asked, with strict
-  instructions and examples, for a JSON list of misheard-term replacements;
-  the app applies only those that pass three checks (verbatim source,
-  similar sound, vocabulary-derived target). Measured on 36 transcripts it
-  proposed exactly one change, the right one (`bekleyen` → `backendci`),
-  and nothing on twelve genuine Turkish sentences full of look-alike words.
-  The first dictation after the worker restarts may run before the model
-  has loaded; it is then skipped for that dictation.
+  `mlx-community/gemma-4-12B-it-qat-4bit` (~11 GB) into the app's model
+  cache and runs it with MLX next to Whisper, about 4 s per dictation;
+  without `mlx-lm` the worker falls back to Qwen3-4B-Instruct through
+  PyTorch. After each dictation the model is shown the sentence after a
+  system prompt, ten fixed examples (half of them "nothing to change") and
+  up to eight of your own past corrections whose sentences resemble it, and
+  asked for a JSON list of `{wrong, right}` pairs. The worker applies a pair
+  only when it passes
+  the gate in `Python/term_llm.py`: the word occurs verbatim and is not
+  already a term; the replacement carries no sentence punctuation, sounds
+  like the word (same first sound, no more than a third of the letters — and
+  never more than three — changed, with `c`/`k`, `ç`/`c`, `w`/`v` folded
+  together) and every word of it is in macOS's Turkish or English dictionary
+  or in the vocabulary. A pair you taught through learning skips the sound
+  and dictionary checks: it is applied whenever the model proposes it in a
+  fitting sentence. One more rule: a single real Turkish word is never
+  turned into a term on the model's say-so (`Komite` → `Commit`, which the
+  model once proposed on a synthetic test), only when taught; real-word
+  fixes (`çalışırsan` → `çalışırken`) and split terms (`front ent` →
+  `Frontend`) stay open. The gate was tuned on real proposals: it stops
+  `Giral` → `Git`, `e-postada` → `endpoint'te` and `komite` → `commit` while
+  passing `be kentçi` → `backendci`, `çıktığının` → `çıktının` and `RVD` →
+  `RWD`. The
+  first dictation after the worker restarts may run before the model has
+  loaded; it is then skipped for that dictation. Set `WHISPERHOLD_LLM` to
+  one or more MLX model ids (comma-separated) to try others; with several,
+  their answers are merged, the first model winning where they disagree on
+  a word.
 - **Learned corrections** — on by default. The app keeps watching the field
   it pasted into for up to two minutes, reading its text through the
   Accessibility permission it already has for pasting. When one or two words
@@ -235,7 +292,12 @@ Labels in the app are in Turkish; the English names are given alongside.
   the dictation language (`bekleyen`), the pair is *not* applied as a blind
   replacement — saying that word on purpose must still work; the layers that
   read context decide case by case. A misspelling that is not a word
-  (`endpoynt`) does become an exact replacement. Chromium and Electron apps
+  (`endpoynt`) does become an exact replacement. A pair is only learned when
+  it is plausibly a hearing error: no sentence punctuation inside, not a
+  two-letter conjunction, and the two forms start with the same sound or
+  share most of their letters (`Giral` → `geri al` yes, `işlediysen` →
+  `yaptıysan` no — that was an edit, and teaching it to the model as an
+  example only did harm). Chromium and Electron apps
   (Chrome, the Claude desktop app, Slack, VS Code) only build their
   accessibility tree when asked, so the app switches it on for the frontmost
   app before reading. Fields it still cannot read (terminals, password
@@ -348,7 +410,12 @@ errors (8.1 % vs 10.3 %) and ran 2.2× faster; beam's extra errors were
 rewrites of what was said (`abi` → `ağabey`). fp32 produced the same text as
 fp16 and was slower. The prompt, on the other hand, earns its place: on ten
 synthesized sentences with software terms it took term spelling from 11/20 to
-20/20 and halved the word error rate.
+20/20 and halved the word error rate. The *shape* of the prompt was measured
+too, since Whisper was trained on preceding transcript text rather than
+lists: a prompt made of the user's own past sentences (the ones richest in
+terms) scored no better than no prompt at all (15.9 % word errors on the
+synthesized sentences and two archived clips), the context sentence plus the
+term list scored 9.3 %, and the two combined 12.1 %. The list stays.
 
 Contextual biasing adds a fixed bonus to the score of every token that starts
 or continues a vocabulary term, so the model prefers `backend` over the
@@ -368,6 +435,46 @@ recording once came back with 19 s of speech replaced by "Bu videoyu
 izlediğiniz için teşekkür ederim.") and re-decodes without the prompt, which
 transcribed that recording word for word. Healthy audio never takes either
 second pass.
+
+Whisper itself was challenged once more in October 2026 against Qwen3-ASR
+1.7B (Qwen's own speech model, Turkish among its 52 languages). On the same
+synthesized sentences and the user's archived recordings it made 2.6× the
+word errors (15.9 % against Whisper's 6.2 %), has no prompt or biasing, and
+turned "Hugging Face'ten" into something unprintable; Whisper large-v3 stays.
+The remaining errors are measured with a text benchmark built from the user's
+own transcripts: every hearing error they corrected by hand (the raw sentence
+and the intended one) plus 51 dictations that must stay unchanged, scored as
+word errors fixed against word errors introduced. The acronym and spelling
+passes above fixed 5 of the 24 errors in that set without touching a single
+correct sentence.
+
+The same benchmark chose the smart-correction model and its prompt. The
+previous model, Qwen3-4B-Instruct, fixed none of the 13 hearing errors with
+any prompt. Gemma 4 12B (QAT 4-bit, MLX, 4.4 s per call) asked for word
+pairs fixed `çıktığının` → `çıktının`, `çalışırsan` → `çalışırken` and `be
+kentçi` → `backendci` and, behind the gate, changed none of the 51 correct
+dictations; asked instead to return the corrected sentence it fixed one error
+more but also "improved" three correct sentences (`benle` → `benimle`), which
+is why the app asks for pairs. Qwen3.5-9B fixed less and damaged a correct
+sentence under the same gate; Qwen3.8-27B matched Gemma on the hearing
+errors and also repaired two Whisper typos the user had let through
+(`dökümana`, `Mükerrel`), but at 9.8 s per call and 16 GB against 4.4 s and
+11 GB. Gemma 4 26B-A4B, a mixture of experts with 4B active parameters, ran
+at 1.4 s a call and fixed a different three (`RVD` → `RWD`, `yaptınca` →
+`yaptın ki`, `be kentçi` → `backendci`), again touching nothing correct, and
+the two Gemma sizes combined took the set from 24 word errors to 12 with
+zero damage — but holding both next to Whisper costs about 30 GB, and the
+app ships with the 12B alone (the pair is one `WHISPERHOLD_LLM` setting
+away). Qwen3.6-35B-A3B (1.1 s a call) fixed one error and added nothing to
+that pair. A synthetic set in the user's register (26 sentences with
+Whisper-style mistakes, 18 that must not change) showed what the memory
+adds: with the user's own past corrections as examples the 12B took 14
+sentences to fully correct instead of 11 (the 26B 11 instead of 8), both
+generalising a taught pair (`yaptınca` → `yaptın ki`) to new sentences; the
+12B with the Swift corrector left 18 of 59 word errors, and its one
+over-correction (`Komite` → `Commit`) is now caught by the gate.
+The remaining errors are real-word substitutions no layer can tell from
+intended speech (`eklemek` for `eklemeni`).
 
 ### Project layout
 
@@ -417,7 +524,12 @@ project.yml       XcodeGen project definition
   worker restart, which tripped a Metal assertion
   (`_status < MTLCommandBufferStatusCommitted`). All GPU work now goes
   through one lock (`Python/gpu_lock.py`); a model finishing its load waits
-  for the dictation to finish instead. `Python/test_gpu_lock.py` fails the
+  for the dictation to finish instead. The memory's embedding model runs on
+  the CPU for a related reason: llama.cpp's Metal backend once hung the
+  worker at start-up, spinning in its GPU residency wait while another
+  process was loading a model, with the lock held. Should a load ever hang
+  again, smart correction gives up on it after two minutes rather than
+  holding every dictation. `Python/test_gpu_lock.py` fails the
   moment a GPU call is added outside that lock, and should the worker ever
   die mid-dictation for another reason, the app restarts it and transcribes
   the same audio again instead of losing the dictation.

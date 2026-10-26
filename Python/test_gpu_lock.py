@@ -24,8 +24,9 @@ MODULES = ["whisper_worker.py", "term_llm.py", "memory.py", "term_bias.py"]
 # Method calls that encode Metal work: moving tensors or modules between
 # devices, decoding, and llama.cpp embeddings.
 GPU_METHODS = {"to", "generate", "embed", "cuda", "mps"}
-# Constructors that put weights on the GPU as a side effect.
-GPU_CONSTRUCTORS = {"Llama"}
+# Constructors and plain calls that put weights on the GPU or run it: llama.cpp's
+# Llama(), mlx-lm's load() and generate().
+GPU_CONSTRUCTORS = {"Llama", "load", "generate"}
 
 # Functions that are only ever called by code already holding the lock:
 # the biasing logits processor runs inside Whisper's generate().

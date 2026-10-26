@@ -80,9 +80,15 @@ class GemmaEmbedder:
         except Exception:
             snapshot = snapshot_download(GEMMA_MODEL_ID, allow_patterns=[GEMMA_FILE_PATTERN])
         path = sorted(glob.glob(os.path.join(snapshot, GEMMA_FILE_PATTERN)))[0]
+        # On the CPU, deliberately. A 300M embedding model takes 9 ms per
+        # sentence either way (measured: 8 ms on Metal), and llama.cpp's Metal
+        # backend once hung the worker at start-up — spinning in its residency
+        # wait while another process was loading the correction model on the
+        # same GPU — with the GPU lock held, so nothing else could load. Whisper
+        # and the correction model keep the GPU to themselves.
         with gpu_lock.LOCK:
-            self.model = Llama(model_path=path, embedding=True, n_gpu_layers=-1, n_ctx=2048, verbose=False)
-        self.device = "metal"
+            self.model = Llama(model_path=path, embedding=True, n_gpu_layers=0, n_ctx=2048, verbose=False)
+        self.device = "cpu"
 
     def encode(self, texts: list[str], kind: str = "passage") -> list[list[float]]:
         out: list[list[float]] = []
@@ -370,6 +376,11 @@ class Memory:
     def contexts(self) -> list[str]:
         with self.lock:
             return [row["text"] for row in self.db.execute("SELECT text FROM contexts ORDER BY position")]
+
+    def learned_pairs(self) -> list[tuple[str, str]]:
+        """Every correction the user taught, for the smart-correction gate."""
+        with self.lock:
+            return [(row["wrong"], row["right"]) for row in self.db.execute("SELECT wrong, right FROM corrections")]
 
     def forget_correction(self, wrong: str, right: str) -> None:
         with self.lock:

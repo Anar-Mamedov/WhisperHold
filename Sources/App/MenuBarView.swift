@@ -64,6 +64,13 @@ struct MenuBarView: View {
                             // tekrar çevirtmek; en son kayıt için tek tıkla burada.
                             Button("Yeniden çevir") { controller.retranscribeLatest() }
                                 .disabled(!controller.canRetranscribe || controller.recordings.isEmpty)
+                            // Büyük modelle bir daha bak: yalnız istendiğinde
+                            // yüklenir, sonuç panoya gider.
+                            Button(controller.isDeepCorrecting ? "Bakılıyor…" : "Derin düzelt") {
+                                controller.deepCorrectLastTranscript()
+                            }
+                            .disabled(controller.isDeepCorrecting)
+                            .help("Büyük düzeltme modeliyle bir daha bak; sonuç panoya kopyalanır (ilk kullanımda ~15 GB iner)")
                             Spacer()
                             Button("Düzelt…") { openRecordings() }
                                 .help("Metni Kayıtlar sekmesinde düzeltip sözlüğe öğret")
