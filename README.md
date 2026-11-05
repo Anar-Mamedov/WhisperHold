@@ -161,13 +161,21 @@ cd Python && ~/Library/Application\ Support/WhisperHold/runtime/.venv/bin/python
 The correction layers are measured, not argued about. `Python/benchmark.py`
 turns the memory into a test set — every correction you taught (the
 sentence as Whisper wrote it, the word you meant) plus the dictations you
-left alone — and runs the worker's text pipeline over it, reporting word
-errors fixed against correct sentences damaged. Run it after changing a
-model, a prompt or the gate:
+left alone — and runs the worker's text pipeline over it, the second
+listening's alternates included, reporting word errors fixed against correct
+sentences damaged. Run it after changing a model, a prompt or the gate:
 
 ```sh
 cd Python && ~/Library/Application\ Support/WhisperHold/runtime/.venv/bin/python3 benchmark.py
 ```
+
+A dictation you left alone is only presumed right; you may not have noticed
+an error in it. Dictations checked by listening to the recording go in
+`~/Library/Application Support/WhisperHold/benchmark_verified.json` — a JSON
+list of `{"raw", "expected", "alternates"}` objects, `raw` being the first
+pass and `alternates` what the second listening heard — and replace whatever
+the memory presumed about the same dictation. The file holds your own
+speech, so it stays with your data and never goes into the repository.
 
 ### Code signing
 
