@@ -33,7 +33,26 @@ from typing import Any
 BIAS_STRENGTH = 2.0
 VOCABULARY_FILE = Path(__file__).with_name("software_terms.txt")
 
+# A term's first token is pushed at every step, before the model has chosen
+# anything, so it must not be a piece that ordinary Turkish starts with. With
+# the bundled list every first token was pushed: 719 of them, 290 of three
+# letters or fewer — single letters (" P", " i") and words like " Ben", " De",
+# " O", " Ne", " en". Only a distinctive first token is pushed now; the rest
+# of a term is still pushed once the model has started it on its own.
+MIN_START_LETTERS = 3
+
 _END = -1
+
+
+def boostable_start(piece: str) -> bool:
+    """Whether a term's first token may be pushed before the model has chosen it:
+    at least three letters, and not a word of the Turkish dictionary."""
+    word = piece.strip()
+    if sum(ch.isalpha() for ch in word) < MIN_START_LETTERS:
+        return False
+    import dictionary
+
+    return dictionary.is_turkish_word(word) is not True
 
 
 def load_vocabulary(path: Path = VOCABULARY_FILE) -> list[str]:
@@ -76,7 +95,9 @@ class TermTrie:
                     node = node.setdefault(token, {})
                 node[_END] = True
                 self.max_depth = max(self.max_depth, len(ids))
-        self.start_tokens = sorted(token for token in self.root if token != _END)
+        self.start_tokens = sorted(
+            token for token in self.root if token != _END and boostable_start(tokenizer.decode([token]))
+        )
 
     def continuations(self, recent: list[int]) -> set[int]:
         """Tokens that continue a term whose prefix ends the recent tokens."""

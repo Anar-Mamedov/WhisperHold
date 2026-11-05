@@ -10,6 +10,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -22,7 +23,12 @@ class FakeTokenizer:
     " backendci" tokenizes as [" backend", "ci"] like the real tokenizer would.
     """
 
-    pieces = {" backend": 1, "ci": 2, " Backend": 3, " pull": 4, " request": 5, " bek": 6, "ley": 7, "en": 8, " Pull": 9}
+    pieces = {" backend": 1, "ci": 2, " Backend": 3, " pull": 4, " request": 5, " bek": 6, "ley": 7, "en": 8, " Pull": 9,
+              " Ben": 10, "to": 11, " P": 12, "y": 13}
+
+    def decode(self, ids):
+        names = {token: piece for piece, token in self.pieces.items()}
+        return "".join(names[token] for token in ids)
 
     def encode(self, text, add_special_tokens=False):
         out = []
@@ -65,6 +71,19 @@ class TrieTests(unittest.TestCase):
         self.assertEqual(trie.continuations([4]), {5})         # after " pull" → " request"
         self.assertEqual(trie.continuations([6, 7]), set())    # "bekley…" is no term prefix
         self.assertEqual(trie.continuations([]), set())
+
+    def test_only_distinctive_first_tokens_are_pushed(self) -> None:
+        turkish = {"ben"}
+        with mock.patch("dictionary.is_turkish_word", side_effect=lambda word: word.lower() in turkish):
+            self.assertFalse(term_bias.boostable_start(" P"))         # too short
+            self.assertFalse(term_bias.boostable_start(" Ben"))       # an ordinary Turkish word
+            self.assertTrue(term_bias.boostable_start(" backend"))
+            self.assertTrue(term_bias.boostable_start(" API"))
+            trie = term_bias.TermTrie(FakeTokenizer(), ["backendci", "Bento", "Py"])
+        self.assertEqual(trie.start_tokens, [1, 3])                   # " backend", " Backend"
+        # Once the model writes " Ben" on its own, the rest of "Bento" is still pushed.
+        self.assertEqual(trie.continuations([10]), {11})
+        self.assertEqual(trie.continuations([12]), {13})
 
 
 if __name__ == "__main__":

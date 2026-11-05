@@ -155,7 +155,7 @@ fallback heuristic) have unit tests too; they run with the app's own
 environment:
 
 ```sh
-cd Python && ~/Library/Application\ Support/WhisperHold/runtime/.venv/bin/python3 -m unittest test_whisper_worker test_term_bias test_term_llm test_memory test_acronyms test_dictionary test_gpu_lock test_benchmark
+cd Python && ~/Library/Application\ Support/WhisperHold/runtime/.venv/bin/python3 -m unittest test_whisper_worker test_term_bias test_term_llm test_memory test_acronyms test_dictionary test_gpu_lock test_benchmark test_benchmark_audio
 ```
 
 The correction layers are measured, not argued about. `Python/benchmark.py`
@@ -176,6 +176,23 @@ list of `{"raw", "expected", "alternates"}` objects, `raw` being the first
 pass and `alternates` what the second listening heard — and replace whatever
 the memory presumed about the same dictation. The file holds your own
 speech, so it stays with your data and never goes into the repository.
+
+`Python/benchmark_audio.py` measures the whole chain from the audio. For each
+verified case that names a recording still in `~/Documents/WhisperHold`, it
+runs what the app runs — the prompt composed from the memory, biasing, the
+first pass, the second listening, smart correction — with the memory and the
+learned corrections as they were when that dictation was made (a copy of the
+memory without anything stored later; the real one is never written), and
+counts word errors after the first pass and after correction. A guard set of
+generic sentences spoken by macOS's Turkish voice (`benchmark_guard.json`:
+software terms, and ordinary Turkish full of look-alike words) catches a
+change that helps your recordings but damages everyday speech. The Swift
+post-processing is not part of it. Run it after changing the prompt, the
+biasing, the decoder or the second listening:
+
+```sh
+cd Python && ~/Library/Application\ Support/WhisperHold/runtime/.venv/bin/python3 benchmark_audio.py
+```
 
 ### Code signing
 
@@ -441,6 +458,27 @@ synthesized term sentences from 9.1 % to 6.5 % and changed one of twelve
 genuine Turkish sentences (the rare `rende` became `render`). On recordings
 longer than one 30 s window the same bias was destructive at every strength
 tried, so it is applied to single-window audio only.
+
+The bonus on a term's first token is paid at every step, before the model has
+chosen anything, so since November 2026 it goes only to a distinctive first
+token: three letters or more and not a Turkish dictionary word. With the
+bundled list every first token had been pushed — 719 of them, single letters
+(` P`, ` i`) and everyday Turkish starts (` Ben`, ` De`, ` O`, ` Ne`) among
+them — and that is what swapped a spoken English word for a different one in
+a real recording and turned the guard sentence "Komite raporunu" into
+`Commit'e raporunu`. The rest of a term is still
+pushed once the model starts it. Measured with `benchmark_audio.py`: the
+user's verified recordings went from 8 word errors to 5 (134 words) and the
+synthesized guard sentences from 8 to 7 (154 words, 5 to 4 after smart
+correction). Tried in the same run and dropped because they changed nothing
+or made things worse: leaving the bundled list or ordinary-Turkish learned
+terms out of biasing (no change), giving back the bonus of an unfinished
+term in beam search (no change), the term list without its lead-in sentence
+(guard 7 → 8, and the model copied the list's lowercase style), at most 15
+terms in the prompt (guard 7 → 11: unlisted terms came out misspelled), a
+prompt-free greedy second listening (smart-correction errors 4 → 6: its
+misspelled terms became wrong hints) and trimming leading silence (no change;
+the recordings carry almost none).
 
 Two safety nets cover the prompt's one measured failure. If the model answers
 a clip with nothing but a subtitle artifact, the app decodes the clip once

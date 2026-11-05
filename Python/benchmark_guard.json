@@ -1,0 +1,22 @@
+[
+ {"text": "Backend tarafında yeni bir endpoint açtım, frontend ekibi bugün deploy edecek.", "kind": "term"},
+ {"text": "Bu branch'i main'e merge etmeden önce bütün testleri çalıştır.", "kind": "term"},
+ {"text": "GitHub'daki pull request'i inceleyip commit mesajını düzeltir misin?", "kind": "term"},
+ {"text": "Xcode'da build alırken Swift derleyicisi bir hata verdi.", "kind": "term"},
+ {"text": "Hugging Face'ten indirdiğimiz modeli PyTorch ile yükledik.", "kind": "term"},
+ {"text": "Next.js uygulamasını Cloudflare üzerinde yayınladık.", "kind": "term"},
+ {"text": "API anahtarını ortam değişkenine koyup sunucuyu yeniden başlattım.", "kind": "term"},
+ {"text": "Docker imajını küçültmek için gereksiz paketleri kaldırdım.", "kind": "term"},
+ {"text": "Ayarlar sayfasındaki formun altına bir select box ekleyelim.", "kind": "term"},
+ {"text": "Bu component'i debug ederken console'da bir uyarı gördüm.", "kind": "term"},
+ {"text": "Bekleyen işleri yarın sabah toplantıda konuşalım.", "kind": "plain"},
+ {"text": "Komite raporunu hafta sonuna kadar teslim etmemiz gerekiyor.", "kind": "plain"},
+ {"text": "Annem havuçları rende ile ince ince doğradı.", "kind": "plain"},
+ {"text": "Kargodaki paketi kapıcıya bırakmışlar, akşam alırım.", "kind": "plain"},
+ {"text": "Bu sayfadaki yazılar çok küçük, biraz büyütelim.", "kind": "plain"},
+ {"text": "Ben de seninle geleceğim, biraz bekler misin?", "kind": "plain"},
+ {"text": "Dün akşam arabayla eve dönerken yolda çok trafik vardı.", "kind": "plain"},
+ {"text": "Ne zaman müsait olursan haber ver, birlikte bakarız.", "kind": "plain"},
+ {"text": "O kitabı bitirince bana da ödünç verir misin?", "kind": "plain"},
+ {"text": "Sabah erkenden kalkıp sahilde uzun bir yürüyüş yaptık.", "kind": "plain"}
+]
