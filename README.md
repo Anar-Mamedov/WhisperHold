@@ -530,6 +530,16 @@ over-correction (`Komite` → `Commit`) is now caught by the gate.
 The remaining errors are real-word substitutions no layer can tell from
 intended speech (`eklemek` for `eklemeni`).
 
+Handing the model the user's last 20 dictations as well — each with the
+corrections taught on it applied, followed by "looking at these sentences,
+what did the user mean below?" — was measured in November 2026 and not
+adopted. On the memory's 20 erroneous sentences it left the same 32 word
+errors (fixing two new ones, losing three it had fixed before), it changed
+four more of the 98 correct sentences (two of them arguably for the better,
+`Yada` → `Ya da`), the guard set kept one error more, and each call took 7.2 s
+instead of 4.3 s. Part of the reason is in the data: a dictation the user
+never corrected goes in as a "correct" example even when it is not.
+
 ### Project layout
 
 ```
