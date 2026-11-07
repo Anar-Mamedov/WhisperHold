@@ -15,6 +15,14 @@ import Foundation
 /// turuncu mikrofon göstergesi sürekli yanar. Bunun yerine son kullanımdan sonra
 /// `keepWarmInterval` kadar açık tutup mikrofonu bırakıyoruz: arka arkaya diktede
 /// gecikme sıfır, boştayken mikrofon gerçekten kapalı.
+///
+/// **Boştayken motor yok.** Mikrofonu bırakırken `AVAudioEngine` nesnesini de
+/// bırakıyoruz; bir sonraki dikte yenisini kuruyor. Durdurulmuş bir motor bile
+/// giriş birimini (AUHAL) ayakta tutuyor: birim, varsayılan giriş ve çıkıştan
+/// kurulmuş özel bir aggregate cihaza bağlı kalıyor ve varsayılan cihaz her
+/// değiştiğinde (Bluetooth kulaklık bağlanıp kopunca) yeniden kuruluyor.
+/// 2026-11-08'de bu, kayıt yokken `AVAudioIOUnit` dinleyicisini sonsuz döngüye
+/// soktu: WhisperHold ~%36, coreaudiod ~%63 CPU (WH-3).
 final class AudioRecorder {
     static let sampleRate: Double = 16_000
 
@@ -41,7 +49,8 @@ final class AudioRecorder {
         shutdown()
     }
 
-    private let engine = AVAudioEngine()
+    /// Yalnızca mikrofon açıkken var; tap'i de onunla birlikte kurulup kalkar.
+    private var engine: AVAudioEngine?
     private let targetFormat = AVAudioFormat(
         commonFormat: .pcmFormatFloat32,
         sampleRate: AudioRecorder.sampleRate,
@@ -50,7 +59,6 @@ final class AudioRecorder {
     )!
 
     private var converter: AVAudioConverter?
-    private var isTapInstalled = false
     private var idleTimer: Timer?
 
     private let lock = NSLock()
@@ -66,32 +74,36 @@ final class AudioRecorder {
 
     // MARK: - Yaşam döngüsü
 
-    /// Motoru çalıştırır (mikrofon burada açılır). Kayda hazırlık için kısayola
-    /// basıldığında çağrılır; zaten çalışıyorsa hemen döner.
+    /// Motoru kurup çalıştırır (mikrofon burada açılır). Kayda hazırlık için
+    /// kısayola basıldığında çağrılır; zaten çalışıyorsa hemen döner.
     func prepare() throws {
         idleTimer?.invalidate()
         idleTimer = nil
 
-        guard !engine.isRunning else { return }
+        if let engine, engine.isRunning { return }
 
-        applyPreferredDevice()
+        // Motor ya hiç yok ya da kendiliğinden durmuş (cihaz değişince
+        // AVAudioEngine kendini durdurur). İkinci durumda tap ve dönüştürücü
+        // eski giriş formatına göre kurulu; sıfırdan kuruyoruz.
+        teardownEngine()
+
+        let engine = AVAudioEngine()
+        applyPreferredDevice(to: engine)
 
         let input = engine.inputNode
         let inputFormat = input.outputFormat(forBus: 0)
 
         // Cihaz gerçekten hazır değilse format 0 Hz gelir; bu hâlde tap kurmak
-        // sessizce bozuk kayıt üretir.
+        // sessizce bozuk kayıt üretir. Yerel motor burada bırakılır.
         guard inputFormat.sampleRate > 0 else {
             throw RecorderError.inputUnavailable
         }
 
-        if !isTapInstalled {
-            converter = AVAudioConverter(from: inputFormat, to: targetFormat)
-            input.installTap(onBus: 0, bufferSize: 1024, format: inputFormat) { [weak self] buffer, _ in
-                self?.ingest(buffer)
-            }
-            isTapInstalled = true
+        converter = AVAudioConverter(from: inputFormat, to: targetFormat)
+        input.installTap(onBus: 0, bufferSize: 1024, format: inputFormat) { [weak self] buffer, _ in
+            self?.ingest(buffer)
         }
+        self.engine = engine
 
         lock.withLock {
             ring = [Float](repeating: 0, count: max(preRollSampleCount, 1))
@@ -100,14 +112,19 @@ final class AudioRecorder {
         }
 
         engine.prepare()
-        try engine.start()
+        do {
+            try engine.start()
+        } catch {
+            teardownEngine()
+            throw error
+        }
     }
 
     /// Seçili cihazı motorun giriş birimine bağlar.
     ///
     /// Cihaz artık takılı değilse sessizce sistem varsayılanında kalıyoruz —
     /// kullanıcı mikrofonunu çıkardığında dikte tamamen bozulmasın diye.
-    private func applyPreferredDevice() {
+    private func applyPreferredDevice(to engine: AVAudioEngine) {
         guard let uid = preferredDeviceUID,
               let deviceID = AudioDevices.deviceID(forUID: uid),
               let unit = engine.inputNode.audioUnit
@@ -132,12 +149,7 @@ final class AudioRecorder {
         idleTimer?.invalidate()
         idleTimer = nil
 
-        if isTapInstalled {
-            engine.inputNode.removeTap(onBus: 0)
-            isTapInstalled = false
-        }
-        if engine.isRunning { engine.stop() }
-        converter = nil
+        teardownEngine()
 
         lock.withLock {
             isRecording = false
@@ -145,6 +157,17 @@ final class AudioRecorder {
             ringFilled = 0
             ringWrite = 0
         }
+    }
+
+    /// Tap'i söküp motoru durdurur ve nesneyi bırakır; giriş birimi ve
+    /// aggregate cihaz onunla birlikte gider. Ses thread'i `converter`'ı okur,
+    /// o yüzden onu tap söküldükten sonra sıfırlıyoruz.
+    private func teardownEngine() {
+        guard let engine else { return }
+        engine.inputNode.removeTap(onBus: 0)
+        engine.stop()
+        self.engine = nil
+        converter = nil
     }
 
     // MARK: - Kayıt
