@@ -71,6 +71,38 @@ class AudioTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 benchmark_audio.read_wav(path)
 
+    def test_verified_recordings_are_kept_before_the_archive_rotates(self):
+        with tempfile.TemporaryDirectory() as folder:
+            archive, kept = Path(folder) / "archive", Path(folder) / "kept"
+            archive.mkdir()
+            (archive / "dikte-2026-11-12T14-33-51Z.wav").write_bytes(b"new")
+            (archive / "outside.wav").write_bytes(b"x")
+            kept.mkdir()
+            (kept / "dikte-2026-10-28T14-05-29Z.wav").write_bytes(b"old")
+            verified = [
+                {"expected": "Bir.", "recording": "dikte-2026-10-28T14-05-29Z.wav"},   # already kept, gone from the archive
+                {"expected": "İki.", "recording": "dikte-2026-11-12T14-33-51Z.wav"},   # still in the archive
+                {"expected": "Üç.", "recording": "dikte-2026-10-30T20-13-38Z.wav"},    # rotated out before it was kept
+                {"expected": "Dört.", "recording": "../archive/outside.wav"},          # not a bare file name
+                {"expected": "Beş."},                                                   # text-only case
+            ]
+            copied = benchmark_audio.keep_recordings(verified, archive, kept)
+            self.assertEqual(copied, ["dikte-2026-11-12T14-33-51Z.wav"])
+            self.assertEqual((kept / "dikte-2026-11-12T14-33-51Z.wav").read_bytes(), b"new")
+            self.assertEqual((kept / "dikte-2026-10-28T14-05-29Z.wav").read_bytes(), b"old")
+            self.assertEqual(sorted(p.name for p in kept.iterdir()),
+                             ["dikte-2026-10-28T14-05-29Z.wav", "dikte-2026-11-12T14-33-51Z.wav"])
+            self.assertEqual(benchmark_audio.keep_recordings(verified, archive, kept), [])
+
+            # The archive rotates: the kept copy is what the benchmark reads.
+            (archive / "dikte-2026-11-12T14-33-51Z.wav").unlink()
+            cases, missing = benchmark_audio.recording_cases(verified, (kept, archive))
+            self.assertEqual([c["name"] for c in cases],
+                             ["dikte-2026-10-28T14-05-29Z.wav", "dikte-2026-11-12T14-33-51Z.wav"])
+            self.assertEqual([c["audio"].parent for c in cases], [kept, kept])
+            self.assertEqual(cases[0]["expected"], "Bir.")
+            self.assertEqual(missing, ["dikte-2026-10-30T20-13-38Z.wav", "../archive/outside.wav"])
+
     def test_hint_effects(self):
         effects = benchmark_audio.hint_effects(
             "Ayarlar menüs açılıyor", [{"wrong": "menüs", "right": "menüsü"}, {"wrong": "açılıyor", "right": "kapanıyor"},

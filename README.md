@@ -43,7 +43,9 @@ is needed.
   back into the acronym, suffix included (`el eleme` → `LLM'e`, `ey pi ay` →
   `API`); on 217 stored texts it changed only the two that needed it. A short
   table of spellings that are wrong in every Turkish sentence (`yada` → `ya
-  da`, `herşey` → `her şey`) is applied after that.
+  da`, `herşey` → `her şey`) is applied after that, and so are misspelled
+  stems, which keep whatever suffix follows (`dökümandaki` → `dokümandaki`:
+  Whisper writes the word the way it is commonly said).
 - **Learns from your corrections.** After a dictation is pasted, the app
   watches that text field through the Accessibility API. Fix a word and
   press Enter (or just pause) and the corrected spelling is added to your
@@ -177,8 +179,13 @@ pass and `alternates` what the second listening heard — and replace whatever
 the memory presumed about the same dictation. The file holds your own
 speech, so it stays with your data and never goes into the repository.
 
-`Python/benchmark_audio.py` measures the whole chain from the audio. For each
-verified case that names a recording still in `~/Documents/WhisperHold`, it
+`Python/benchmark_audio.py` measures the whole chain from the audio. The
+archive in `~/Documents/WhisperHold` keeps only its newest five recordings,
+so a verified case would lose its audio within a day; each run first copies
+the verified recordings still in the archive to
+`~/Library/Application Support/WhisperHold/benchmark_recordings` and reads
+them from there from then on, and it names the cases whose audio is already
+gone. For each verified case whose recording it finds, it
 runs what the app runs — the prompt composed from the memory, biasing, the
 first pass, the second listening, smart correction — with the memory and the
 learned corrections as they were when that dictation was made (a copy of the
@@ -539,6 +546,74 @@ four more of the 98 correct sentences (two of them arguably for the better,
 `Yada` → `Ya da`), the guard set kept one error more, and each call took 7.2 s
 instead of 4.3 s. Part of the reason is in the data: a dictation the user
 never corrected goes in as a "correct" example even when it is not.
+
+In November 2026 the question was put again from the audio side, with a set
+made for it: the user read 26 dictations in their own register — Turkish
+sentences carrying English software terms, 448 words, two of them longer
+than one window — through the app itself, and the recordings went into the
+verified set (13 to tune on, 13 held back). Together with eleven older
+spontaneous recordings — five of them scored against the app's own unchecked
+transcript — that makes 755 words. Nothing that touches the recognizer beat
+what the app already does:
+
+- **Other checkpoints**, same prompt and biasing, first pass plus the Swift
+  corrector: `whisper-large-v3` 33 word errors (4.4 %), `BuzzASR/turkish` (a
+  Turkish fine-tune of large-v3) 34, `whisper-large-v2` 41,
+  `whisper-large-v3-turbo` 89. Turbo drifted into Azerbaijani spelling on
+  this speaker (`mərhaba`, `ilətə bilir`). The fine-tune wrote the read
+  sentences more by the book (9 errors against 16 on the held-back half) but
+  made three times the errors on the spontaneous recordings (12 against 4:
+  `onunla` → `onla`, `genel` → `cenel`), and those are what dictation is.
+- **Decoder, prompt and biasing variants** on the 13 tuning recordings (228
+  words): the current setup 13 errors; no prompt 17; neither prompt nor
+  biasing 18; no biasing, biasing at 1.0, or toward the user's list only 13;
+  biasing at 3.0, beam search, the list without its lead-in sentence, or
+  ordinary-Turkish learned words left out of the prompt 14; the context
+  sentence alone 16. Splitting a long recording at its pauses and decoding
+  every piece as one window — so the prompt and the biasing reach all of it —
+  made no difference on recordings joined into 40–50 s clips (10 errors
+  against 11) and was worse on the one genuinely long recording among the
+  thirteen (5 against 2).
+- **A wider prompt vocabulary.** The built-in terms the user had actually
+  dictated before were added to the prompt: 13–14 errors, the same. To see
+  what vocabulary could ever buy, the recordings were made harder (resampled
+  1.25× and 1.4× faster, and 1.25× with pink noise at 10 dB: 39 clips, 684
+  words) and every term of the script was listed in the prompt, which no real
+  setting could know: 45 errors against 49. The prompt itself earns its place
+  on the same clips (66 without it); a longer list does not.
+- **Asking the audio about a correction.** Whisper can score a sentence
+  against the recording, so a proposed replacement could be accepted only
+  when the audio supports it. It does not separate right from wrong: the true
+  corrections `kitaba` → `GitHub'a` and `model` → `modal` cost 13.0 and 11.4
+  nats, inside the range of deliberately wrong ones (7 to 28). Listing the
+  candidate in the prompt does not help either — it makes a wrong one as
+  welcome as a right one.
+
+What is left on these recordings is mostly not a hearing problem. The full
+chain differed from the script in 27 words. In ten of them at least three of
+the four checkpoints wrote the same other word and none wrote the scripted
+one, which makes those the reader's own departures (`değişiklikleri` for
+`değişikliği`); the verified set records what was said there, leaving 17.
+Seven of those are suffix forms the checkpoints themselves split on (`kodu
+ile mi` / `koduyla mı`), five are the vowel or consonant of a suffix on an
+English term (`payload'unda` / `payload'ında`), and three are English terms
+pronounced the Turkish way that come out as Turkish words (`GitHub'a` as
+`kitaba`, `push'la` as `puşla`, `modal` as `model`): every checkpoint wrote
+the same word, and only the sentence can tell. That is the job of the
+correction model and of the pairs the user teaches it.
+
+Three small things were wrong in the text itself and are fixed. `ID` was
+missing from the built-in list, so the corrector could not restore its
+capitals when the model wrote `id` — six times in one 51 s recording; it is
+listed now, with `APK`, `select box`, `checkbox` and `Google Play`. `döküman`
+is how `doküman` is usually said and how four of the user's sixteen came out;
+the spelling pass now repairs the stem and keeps the suffix. Run over 476
+stored texts the two changes touched those words and nothing else. End to end
+on 57 recordings (909 words, guard sentences included) the result is 35 word
+errors before and 34 after — capitals are not counted — with no recording
+worse. And the verified
+recordings are now kept: four of the five verified a week earlier had been
+rotated out of the archive before anyone measured against them again.
 
 ### Project layout
 

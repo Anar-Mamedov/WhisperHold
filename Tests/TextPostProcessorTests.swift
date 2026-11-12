@@ -28,6 +28,21 @@ final class TextPostProcessorTests: XCTestCase {
         XCTAssertEqual(processor.process("Yada bunlar."), "Yada bunlar.")
     }
 
+    func testTurkishStemFixesKeepTheSuffix() {
+        var turkish = TextPostProcessor()
+        turkish.turkishSpelling = true
+        // Gövde düzelir, ek ve büyük harf olduğu gibi kalır.
+        XCTAssertEqual(turkish.process("Dökümandaki maddeleri yaptım, dökümana da ekledim."),
+                       "Dokümandaki maddeleri yaptım, dokümana da ekledim.")
+        XCTAssertEqual(turkish.process("Bu dökümanı incele."), "Bu dokümanı incele.")
+        // Doğru yazım ve başka kelimeler etkilenmez: "döküm" ayrı bir kelime,
+        // "dokuma" ise dokumaktan gelir.
+        XCTAssertEqual(turkish.process("Dokümanın dökümünü çıkar, dokumanı beğendim."),
+                       "Dokümanın dökümünü çıkar, dokumanı beğendim.")
+        // Türkçe yazım kapalıyken dokunulmaz.
+        XCTAssertEqual(processor.process("Dökümana bak."), "Dökümana bak.")
+    }
+
     func testRealThanksAreKept() {
         XCTAssertEqual(processor.process("Gerçekten çok teşekkür ederim Erkan abi."), "Gerçekten çok teşekkür ederim Erkan abi.")
     }

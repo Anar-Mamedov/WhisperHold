@@ -15,6 +15,7 @@ fullstack
 devops
 API
 SDK
+ID
 CLI
 GUI
 UI
@@ -251,6 +252,8 @@ desktop
 tablet
 modal
 dropdown
+select box
+checkbox
 tooltip
 navbar
 sidebar
@@ -511,6 +514,8 @@ iOS
 macOS
 TestFlight
 App Store
+Google Play
+APK
 Objective-C
 CocoaPods
 C#

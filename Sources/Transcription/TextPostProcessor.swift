@@ -35,6 +35,19 @@ struct TextPostProcessor {
         ("herkez", "herkes"), ("orjinal", "orijinal"), ("tabiki", "tabii ki"),
     ]
 
+    /// Ek alan kelimelerin yanlış yazılmış gövdeleri. Yukarıdaki tablo yalnız
+    /// kelimenin tamamını eşleştirir; bunlar gövdedir, arkasındaki ek olduğu
+    /// gibi kalır ("dökümandaki" → "dokümandaki").
+    ///
+    /// Whisper söyleneni yazar ve "doküman" günlük konuşmada çoğu zaman
+    /// "döküman" diye söylenir: kullanıcının 172 diktesindeki 16 "doküman"ın
+    /// dördü bu yazımla çıkmıştı. Türkçede "döküman" diye başlayan başka bir
+    /// kelime yok. "dokuman" bilerek listede değil: "dokuma" (dokumak) kelimesinin
+    /// iyelikli biçimi olabilir.
+    static let turkishStemFixes: [(wrong: String, right: String)] = [
+        ("döküman", "doküman"), ("dökuman", "doküman"),
+    ]
+
     /// Tamamı bu ifadelerden biriyse çıktı tamamen atılır.
     /// Kısmi eşleşmeye bakmıyoruz — "teşekkürler" gerçek bir dikte olabilir.
     private static let hallucinations: Set<String> = {
@@ -323,8 +336,11 @@ struct TextPostProcessor {
 
     static func applyingTurkishSpelling(to text: String) -> String {
         var result = text
-        for (wrong, right) in turkishSpellingFixes {
-            let pattern = "(?<!\\p{L})" + NSRegularExpression.escapedPattern(for: wrong) + "(?!\\p{L})"
+        // Tam kelimeler iki yandan, gövdeler yalnız baştan harf sınırına bakar.
+        let fixes = turkishSpellingFixes.map { ($0.wrong, $0.right, "(?!\\p{L})") }
+            + turkishStemFixes.map { ($0.wrong, $0.right, "") }
+        for (wrong, right, tail) in fixes {
+            let pattern = "(?<!\\p{L})" + NSRegularExpression.escapedPattern(for: wrong) + tail
             guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { continue }
             for match in regex.matches(in: result, range: NSRange(result.startIndex..., in: result)).reversed() {
                 guard let range = Range(match.range, in: result) else { continue }

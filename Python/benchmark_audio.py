@@ -20,6 +20,12 @@ Turkish full of look-alike words, spoken by macOS's Turkish voice) catches a
 change that helps the user's recordings but damages ordinary speech or term
 spelling. Its audio is synthesized on first use into a temporary folder.
 
+The archive in ~/Documents/WhisperHold keeps only its newest few recordings,
+so a verified case would lose its audio within a day. Every run therefore
+copies the verified recordings still in the archive into
+~/Library/Application Support/WhisperHold/benchmark_recordings, next to the
+verified set, and reads them from there afterwards.
+
 Not covered: the Swift post-processing (term corrector, replacements, the
 hallucination filter), which is the same for every variant measured here.
 
@@ -37,6 +43,7 @@ import json
 import os
 import plistlib
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -54,6 +61,11 @@ os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 import benchmark  # noqa: E402
 
 ARCHIVE = Path.home() / "Documents/WhisperHold"
+# Where verified recordings are kept once the tool has seen them: the archive
+# rotates (RecordingArchive.retainCount), this folder does not. In November
+# 2026 four of the five recordings verified a week earlier had already been
+# rotated out and the set could no longer be measured.
+KEPT = benchmark.SUPPORT / "benchmark_recordings"
 GUARD = Path(__file__).with_name("benchmark_guard.json")
 GUARD_AUDIO = Path(tempfile.gettempdir()) / "whisperhold-guard"
 PREFERENCES_SWIFT = Path(__file__).resolve().parent.parent / "Sources/Settings/Preferences.swift"
@@ -208,14 +220,41 @@ def guard_cases() -> list[dict[str, Any]]:
     return cases
 
 
-def recording_cases(verified: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """The verified cases whose recording is still in the archive."""
-    cases = []
+def keep_recordings(verified: list[dict[str, Any]], archive: Path | None = None, kept: Path | None = None) -> list[str]:
+    """Copy the verified recordings still in the archive into the kept folder;
+    returns the names copied now. A recording already kept is left alone."""
+    archive, kept = archive or ARCHIVE, kept or KEPT
+    copied = []
     for case in verified:
         name = case.get("recording")
-        if name and (ARCHIVE / name).exists():
-            cases.append({"name": name, "audio": ARCHIVE / name, "expected": case["expected"], "moment": recorded_at(name)})
-    return cases
+        if not name or Path(name).name != name:
+            continue  # a bare file name only; never a path out of the folders
+        source, target = archive / name, kept / name
+        if source.is_file() and not target.exists():
+            kept.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+            copied.append(name)
+    return copied
+
+
+def recording_cases(
+    verified: list[dict[str, Any]], folders: tuple[Path, ...] | None = None
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """The verified cases whose recording can still be found — in the kept
+    folder first, then in the archive — and the names of those that cannot."""
+    folders = folders or (KEPT, ARCHIVE)
+    cases, missing = [], []
+    for case in verified:
+        name = case.get("recording")
+        if not name:
+            continue
+        bare = Path(name).name == name  # a file name, never a path out of the folders
+        audio = next((folder / name for folder in folders if bare and (folder / name).is_file()), None)
+        if audio is None:
+            missing.append(name)
+            continue
+        cases.append({"name": name, "audio": audio, "expected": case["expected"], "moment": recorded_at(name)})
+    return cases, missing
 
 
 # MARK: one case through the chain
@@ -323,11 +362,17 @@ def main() -> int:
     args = parser.parse_args()
 
     verified = benchmark.load_cases(Path(args.verified)) if Path(args.verified).exists() else []
-    sets = {"kayıtlar": recording_cases(verified)}
+    kept = keep_recordings(verified)
+    if kept:
+        print(f"{len(kept)} doğrulanmış kayıt arşivden {KEPT} klasörüne kopyalandı.")
+    recordings, missing = recording_cases(verified)
+    if missing:
+        print(f"{len(missing)} doğrulanmış kaydın sesi artık yok (arşivden silinmiş): " + ", ".join(missing))
+    sets = {"kayıtlar": recordings}
     if not args.no_guard:
         sets["koruma"] = guard_cases()
     if not sets["kayıtlar"]:
-        print(f"Arşivde doğrulanmış kayıt yok ({args.verified}, {ARCHIVE}).")
+        print(f"Sesi bulunan doğrulanmış kayıt yok ({args.verified}; {KEPT}, {ARCHIVE}).")
         return 1
 
     settings = read_settings()

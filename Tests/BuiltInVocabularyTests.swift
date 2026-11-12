@@ -32,4 +32,18 @@ final class BuiltInVocabularyTests: XCTestCase {
         corrector.terms = ["button"]
         XCTAssertEqual(corrector.correct("Butonlar bozuldu."), "Button'lar bozuldu.")
     }
+
+    /// Model listedeki küçük harfli terimlerin biçimini kopyalayıp kısaltmaları
+    /// da küçük yazabiliyor: 51 saniyelik gerçek bir kayıtta "ID" altı kez
+    /// "id" çıktı. Kısaltma yerleşik listede olunca büyük harfi geri gelir;
+    /// aynı harflerle başlayan gerçek kelimelere dokunulmaz.
+    func testListedAcronymsGetTheirCapitalsBack() {
+        var corrector = TermCorrector()
+        corrector.builtInTerms = BuiltInVocabulary.terms
+        let turkish: Set<String> = ["yanlış", "gönderiyordu", "düzelttim", "kurdum", "idare", "eder", "idi"]
+        corrector.isKnownWord = { turkish.contains($0.lowercased(with: Locale(identifier: "tr_TR"))) }
+        XCTAssertEqual(corrector.correct("Frontend yanlış id gönderiyordu, id'leri düzelttim, apk'yı kurdum."),
+                       "Frontend yanlış ID gönderiyordu, ID'leri düzelttim, APK'yı kurdum.")
+        XCTAssertEqual(corrector.correct("İdare eder, yanlış idi."), "İdare eder, yanlış idi.")
+    }
 }
